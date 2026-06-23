@@ -154,6 +154,7 @@
     };
   </script>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
     body { font-family: 'Sarabun', sans-serif; background: linear-gradient(135deg, #fff1f2 0%, #eff6ff 100%); color: #475569; }
@@ -382,7 +383,249 @@
     function cancelEdit() { isEditing=false; editingRecordId=null; document.getElementById('entry-form').reset(); document.getElementById('form-title').innerHTML = `<i class="fas fa-pen-to-square mr-2 text-pink-500"></i>บันทึกข้อมูลรายวัน`; document.getElementById('save-btn-text').textContent = "บันทึกข้อมูล"; const btn = document.getElementById('save-btn'); btn.className = "bg-pink-400 hover:bg-pink-500 text-white font-medium py-2.5 px-6 rounded-xl flex items-center gap-2 transition-all shadow-md shadow-pink-200"; document.getElementById('cancel-edit-btn').classList.add('hidden'); }
     function deleteRecord(id) { if(!confirm('ยืนยันการลบรายการนี้?')) return; window.dataSdk.delete(id).then(result => { if(result.isOk) { showToast('ลบรายการเรียบร้อยแล้ว'); allRecords = allRecords.filter(r => r.id !== id); dataHandler.onDataChanged(allRecords); } else { showToast('เกิดข้อผิดพลาด', 'error'); }}); }
     function setupFormListeners() { const form = document.getElementById('entry-form'); const cancelBtn = document.getElementById('cancel-edit-btn'); if(cancelBtn) cancelBtn.addEventListener('click', (e) => { e.preventDefault(); cancelEdit(); }); form.addEventListener('submit', async (e) => { e.preventDefault(); const saveBtn = document.getElementById('save-btn'); saveBtn.disabled = true; saveBtn.innerHTML = '<div class="loading-spinner mx-auto"></div>'; const received = parseFloat(document.getElementById('amount-received').value) || 0; const paid = parseFloat(document.getElementById('amount-paid').value) || 0; const recordData = { id: isEditing ? editingRecordId : `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, register_type: selectedRegister, sub_category: selectedSubCategory, date: document.getElementById('date-input').value, document_number: document.getElementById('doc-number').value, description: document.getElementById('description').value, amount_received: received, amount_paid: paid, balance: 0, notes: document.getElementById('notes').value, created_at: isEditing ? undefined : new Date().toISOString() }; let result; if (isEditing) { result = await window.dataSdk.update(recordData); } else { result = await window.dataSdk.create(recordData); } saveBtn.disabled = false; saveBtn.innerHTML = isEditing ? `<i class="fas fa-save"></i><span id="save-btn-text">บันทึกการแก้ไข</span>` : `<i class="fas fa-save"></i><span id="save-btn-text">บันทึกข้อมูล</span>`; if (result.isOk) { showToast(isEditing ? 'แก้ไขข้อมูลสำเร็จ' : 'บันทึกข้อมูลสำเร็จ'); form.reset(); if(isEditing) cancelEdit(); window.dataSdk.init(dataHandler); } else { showToast(result.message || 'เกิดข้อผิดพลาด', 'error'); } }); }
-    function downloadExcel() { const filteredRecords = allRecords.filter(r => r.register_type === selectedRegister && r.sub_category === selectedSubCategory); if (filteredRecords.length === 0) { showToast('ไม่มีข้อมูลให้ดาวน์โหลด', 'error'); return; } let csv = '\ufeffวันที่,เลขที่เอกสาร,รายการ,จำนวนเงินรับ,จำนวนเงินจ่าย,ยอดคงเหลือ,หมายเหตุ\n'; filteredRecords.forEach(record => { csv += `${new Date(record.date).toLocaleDateString('th-TH')},${record.document_number},"${record.description}",${record.amount_received},${record.amount_paid},${record.balance},"${record.notes}"\n`; }); const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' })); link.download = `บัญชี_${selectedRegister}_${selectedSubCategory}_${new Date().toLocaleDateString('th-TH')}.csv`; link.click(); }
+    // --- Official-style Excel Export (matching uploaded school accounting register template) ---
+    function sanitizeFileName(name) {
+      return String(name || '').replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim();
+    }
+
+    function getThaiMonthShort(dateText) {
+      if (!dateText) return '';
+      const d = new Date(dateText);
+      if (isNaN(d.getTime())) return '';
+      return ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'][d.getMonth()];
+    }
+
+    function getThaiDay(dateText) {
+      if (!dateText) return '';
+      const d = new Date(dateText);
+      if (isNaN(d.getTime())) return '';
+      return d.getDate();
+    }
+
+    function getFiscalYearText(records) {
+      const first = records.find(r => r.date)?.date;
+      if (!first) return 'พ.ศ.2569';
+      const d = new Date(first);
+      if (isNaN(d.getTime())) return 'พ.ศ.2569';
+      const buddhistYear = d.getFullYear() + 543;
+      return `พ.ศ.${buddhistYear}`;
+    }
+
+    function applyThinBorder(cell) {
+      cell.border = {
+        top: { style: 'thin' }, left: { style: 'thin' },
+        bottom: { style: 'thin' }, right: { style: 'thin' }
+      };
+    }
+
+    function setCellStyle(cell, options = {}) {
+      cell.font = options.font || { name: 'TH Sarabun New', size: 14 };
+      cell.alignment = options.alignment || { vertical: 'middle', horizontal: 'center', wrapText: true };
+      if (options.fill) cell.fill = options.fill;
+      if (options.border !== false) applyThinBorder(cell);
+      if (options.numFmt) cell.numFmt = options.numFmt;
+    }
+
+    async function exportRegisterExcel(register, subCategory = null) {
+      if (typeof ExcelJS === 'undefined') {
+        showToast('โหลดระบบสร้าง Excel ไม่สำเร็จ กรุณาต่ออินเทอร์เน็ตแล้วลองใหม่', 'error');
+        return;
+      }
+
+      const records = allRecords
+        .filter(r => r.register_type === register && (!subCategory || r.sub_category === subCategory))
+        .sort((a, b) => new Date(a.date) - new Date(b.date));
+
+      if (records.length === 0) {
+        showToast('ไม่มีข้อมูลให้ดาวน์โหลด', 'error');
+        return;
+      }
+
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'ระบบบัญชีโรงเรียน';
+      workbook.created = new Date();
+      workbook.modified = new Date();
+
+      const sheetName = (subCategory || register).substring(0, 31);
+      const ws = workbook.addWorksheet(sheetName, {
+        pageSetup: {
+          paperSize: 9, orientation: 'portrait', fitToPage: true,
+          fitToWidth: 1, fitToHeight: 0,
+          margins: { left: 0.25, right: 0.25, top: 0.35, bottom: 0.35, header: 0.15, footer: 0.15 }
+        }
+      });
+
+      ws.columns = [
+        { key: 'month', width: 9 },
+        { key: 'day', width: 8 },
+        { key: 'doc', width: 18 },
+        { key: 'desc1', width: 18 },
+        { key: 'desc2', width: 42 },
+        { key: 'received', width: 14 },
+        { key: 'paid', width: 14 },
+        { key: 'balance', width: 14 },
+        { key: 'notes', width: 18 }
+      ];
+
+      const title = `ทะเบียนคุม${register}${subCategory ? ' รายการ ' + subCategory : ''}`;
+      ws.mergeCells('A1:I1');
+      ws.getCell('A1').value = `${title} ${systemSettings.school_name || ''}`;
+      setCellStyle(ws.getCell('A1'), { border: false, font: { name: 'TH Sarabun New', size: 16, bold: true }, alignment: { horizontal: 'center', vertical: 'middle', wrapText: true } });
+      ws.getRow(1).height = 24;
+
+      ws.mergeCells('A2:I2');
+      ws.getCell('A2').value = subCategory ? `ประเภทบัญชี : ${register}     รายการ : ${subCategory}` : `ประเภทบัญชี : ${register}`;
+      setCellStyle(ws.getCell('A2'), { border: false, font: { name: 'TH Sarabun New', size: 14 }, alignment: { horizontal: 'center', vertical: 'middle', wrapText: true } });
+      ws.getRow(2).height = 22;
+
+      ws.getCell('A4').value = getFiscalYearText(records);
+      ws.getCell('C4').value = 'ที่เอกสาร';
+      ws.getCell('D4').value = 'รายการ';
+      ws.getCell('F4').value = 'จำนวนเงิน';
+      ws.getCell('I4').value = 'หมายเหตุ';
+      ws.getCell('A5').value = 'เดือน';
+      ws.getCell('B5').value = 'วันที่';
+      ws.getCell('F5').value = 'รับ';
+      ws.getCell('G5').value = 'จ่าย';
+      ws.getCell('H5').value = 'คงเหลือ';
+
+      ws.mergeCells('A4:B4');
+      ws.mergeCells('C4:C5');
+      ws.mergeCells('D4:E5');
+      ws.mergeCells('F4:H4');
+      ws.mergeCells('I4:I5');
+
+      for (let r = 4; r <= 5; r++) {
+        ws.getRow(r).height = 24;
+        for (let c = 1; c <= 9; c++) {
+          setCellStyle(ws.getCell(r, c), {
+            font: { name: 'TH Sarabun New', size: 14, bold: true },
+            fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE7F0FB' } },
+            alignment: { horizontal: 'center', vertical: 'middle', wrapText: true }
+          });
+        }
+      }
+
+      let rowIndex = 6;
+      let previousMonth = '';
+      records.forEach((record) => {
+        const month = getThaiMonthShort(record.date);
+        const showMonth = month !== previousMonth ? month : '';
+        previousMonth = month;
+
+        ws.getCell(rowIndex, 1).value = showMonth;
+        ws.getCell(rowIndex, 2).value = getThaiDay(record.date);
+        ws.getCell(rowIndex, 3).value = record.document_number || '';
+        ws.mergeCells(rowIndex, 4, rowIndex, 5);
+        ws.getCell(rowIndex, 4).value = record.description || '';
+        ws.getCell(rowIndex, 6).value = Number(record.amount_received || 0) || null;
+        ws.getCell(rowIndex, 7).value = Number(record.amount_paid || 0) || null;
+        ws.getCell(rowIndex, 8).value = Number(record.balance || 0);
+        ws.getCell(rowIndex, 9).value = record.notes || '';
+
+        for (let c = 1; c <= 9; c++) {
+          const cell = ws.getCell(rowIndex, c);
+          setCellStyle(cell, {
+            font: { name: 'TH Sarabun New', size: 13 },
+            alignment: { horizontal: c >= 6 && c <= 8 ? 'right' : (c === 4 ? 'left' : 'center'), vertical: 'top', wrapText: true },
+            numFmt: c >= 6 && c <= 8 ? '#,##0.00;[Red]-#,##0.00;-' : undefined
+          });
+        }
+        ws.getRow(rowIndex).height = Math.max(24, Math.min(72, Math.ceil(String(record.description || '').length / 42) * 18));
+        rowIndex += 1;
+      });
+
+      const totalRow = rowIndex;
+      ws.mergeCells(totalRow, 1, totalRow, 5);
+      ws.getCell(totalRow, 1).value = 'รวมทั้งสิ้น';
+      ws.getCell(totalRow, 6).value = records.reduce((sum, r) => sum + Number(r.amount_received || 0), 0);
+      ws.getCell(totalRow, 7).value = records.reduce((sum, r) => sum + Number(r.amount_paid || 0), 0);
+      ws.getCell(totalRow, 8).value = records.length ? Number(records[records.length - 1].balance || 0) : 0;
+      for (let c = 1; c <= 9; c++) {
+        setCellStyle(ws.getCell(totalRow, c), {
+          font: { name: 'TH Sarabun New', size: 14, bold: true },
+          fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } },
+          alignment: { horizontal: c >= 6 && c <= 8 ? 'right' : 'center', vertical: 'middle', wrapText: true },
+          numFmt: c >= 6 && c <= 8 ? '#,##0.00;[Red]-#,##0.00;-' : undefined
+        });
+      }
+      ws.getRow(totalRow).height = 26;
+
+      ws.views = [{ state: 'frozen', ySplit: 5 }];
+      ws.headerFooter.oddFooter = '&Lระบบบัญชีโรงเรียน&Cหน้า &P / &N&Rพิมพ์เมื่อ &D';
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `${sanitizeFileName(subCategory ? 'ทะเบียนคุม_' + subCategory : 'ทะเบียนคุม_' + register)}.xlsx`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+      showToast('ดาวน์โหลด Excel รูปแบบทะเบียนคุมเรียบร้อยแล้ว');
+    }
+
+    async function exportOverviewExcel(register) {
+      if (typeof ExcelJS === 'undefined') {
+        showToast('โหลดระบบสร้าง Excel ไม่สำเร็จ กรุณาต่ออินเทอร์เน็ตแล้วลองใหม่', 'error');
+        return;
+      }
+      const filteredRecords = allRecords.filter(r => r.register_type === register);
+      if (filteredRecords.length === 0) { showToast('ไม่มีข้อมูล', 'error'); return; }
+
+      const workbook = new ExcelJS.Workbook();
+      const ws = workbook.addWorksheet('สรุปภาพรวม', { pageSetup: { paperSize: 9, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0 } });
+      ws.columns = [{width: 40}, {width: 12}, {width: 16}, {width: 16}, {width: 16}];
+      ws.mergeCells('A1:E1');
+      ws.getCell('A1').value = `สรุปภาพรวม ${register}`;
+      ws.getCell('A1').font = { name: 'TH Sarabun New', size: 18, bold: true };
+      ws.getCell('A1').alignment = { horizontal: 'center', vertical: 'middle' };
+      ws.getRow(1).height = 28;
+      ws.addRow([]);
+      ws.addRow(['รายการย่อย', 'จำนวน', 'เงินรับ', 'เงินจ่าย', 'คงเหลือ']);
+      ws.getRow(3).font = { name: 'TH Sarabun New', size: 14, bold: true };
+      ws.getRow(3).alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      ws.getRow(3).eachCell(cell => { cell.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FFE7F0FB'} }; applyThinBorder(cell); });
+
+      let row = 4;
+      (registerData[register] || []).forEach(sub => {
+        const subRecords = filteredRecords.filter(r => r.sub_category === sub);
+        const totalReceived = subRecords.reduce((sum, r) => sum + Number(r.amount_received || 0), 0);
+        const totalPaid = subRecords.reduce((sum, r) => sum + Number(r.amount_paid || 0), 0);
+        const balance = subRecords.length ? Number(subRecords[subRecords.length - 1].balance || 0) : 0;
+        ws.addRow([sub, subRecords.length, totalReceived, totalPaid, balance]);
+        for (let c = 1; c <= 5; c++) {
+          const cell = ws.getCell(row, c);
+          cell.font = { name: 'TH Sarabun New', size: 14 };
+          cell.alignment = { horizontal: c === 1 ? 'left' : 'right', vertical: 'middle', wrapText: true };
+          if (c >= 3) cell.numFmt = '#,##0.00;[Red]-#,##0.00;-';
+          applyThinBorder(cell);
+        }
+        row++;
+      });
+      ws.addRow(['รวมทั้งสิ้น', filteredRecords.length, filteredRecords.reduce((s,r)=>s+Number(r.amount_received||0),0), filteredRecords.reduce((s,r)=>s+Number(r.amount_paid||0),0), (registerData[register] || []).reduce((sum, sub) => { const subRecords = filteredRecords.filter(r => r.sub_category === sub); return sum + (subRecords.length ? Number(subRecords[subRecords.length - 1].balance || 0) : 0); }, 0)]);
+      for (let c = 1; c <= 5; c++) {
+        const cell = ws.getCell(row, c);
+        cell.font = { name: 'TH Sarabun New', size: 14, bold: true };
+        cell.alignment = { horizontal: c === 1 ? 'center' : 'right', vertical: 'middle' };
+        if (c >= 3) cell.numFmt = '#,##0.00;[Red]-#,##0.00;-';
+        cell.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FFF8FAFC'} };
+        applyThinBorder(cell);
+      }
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `${sanitizeFileName('สรุปยอด_' + register)}.xlsx`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+      showToast('ดาวน์โหลดรายงานสรุปเรียบร้อยแล้ว');
+    }
+
+    function downloadExcel() { exportRegisterExcel(selectedRegister, selectedSubCategory); }
+    function downloadOverviewExcel(register) { exportOverviewExcel(register); }
+    function downloadDetailedExcel(register) { exportRegisterExcel(register); }
+
     function showOverview(register) { currentView = 'overview'; selectedRegister = register; document.getElementById('back-btn').classList.remove('hidden'); const filteredRecords = allRecords.filter(r => r.register_type === register); const summaryBySubCategory = {}; registerData[register].forEach(sub => { const subRecords = filteredRecords.filter(r => r.sub_category === sub); summaryBySubCategory[sub] = { count: subRecords.length, totalReceived: subRecords.reduce((sum, r) => sum + r.amount_received, 0), totalPaid: subRecords.reduce((sum, r) => sum + r.amount_paid, 0), balance: subRecords.length > 0 ? subRecords[subRecords.length - 1].balance : 0 }; }); const grandTotalReceived = filteredRecords.reduce((sum, r) => sum + r.amount_received, 0); const grandTotalPaid = filteredRecords.reduce((sum, r) => sum + r.amount_paid, 0); const grandTotalBalance = Object.values(summaryBySubCategory).reduce((sum, s) => sum + s.balance, 0); const detailedRecords = filteredRecords.sort((a, b) => new Date(a.date) - new Date(b.date)); document.getElementById('main-content').innerHTML = `<div class="max-w-7xl mx-auto"><div class="mb-8 flex items-center justify-between flex-wrap gap-4 border-b border-slate-200/60 pb-4"><div><h2 class="text-xl font-bold text-slate-700 mb-1">สรุปภาพรวม: ${register}</h2><p class="text-slate-500">สถานะการเงินปัจจุบัน</p></div><button onclick="downloadOverviewExcel('${register}')" class="px-5 py-2.5 bg-white border border-green-500 text-green-600 hover:bg-green-50 rounded-xl flex items-center gap-2 transition-colors shadow-sm font-medium"><i class="fas fa-file-csv"></i><span>ดาวน์โหลดรายงานสรุป</span></button></div><div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8"><div class="bg-white p-6 rounded-2xl border border-green-100 shadow-sm relative overflow-hidden"><div class="absolute top-0 right-0 p-4 opacity-20"><i class="fas fa-circle-down text-6xl text-green-400"></i></div><p class="text-slate-500 font-medium mb-1">รวมรับทั้งหมด</p><p class="text-3xl font-bold text-green-600">${grandTotalReceived.toLocaleString('th-TH', {minimumFractionDigits: 2})}</p><div class="w-full h-1.5 bg-green-100 mt-4 rounded-full"><div class="h-1.5 bg-green-500 rounded-full" style="width: 100%"></div></div></div><div class="bg-white p-6 rounded-2xl border border-red-100 shadow-sm relative overflow-hidden"><div class="absolute top-0 right-0 p-4 opacity-20"><i class="fas fa-circle-up text-6xl text-red-400"></i></div><p class="text-slate-500 font-medium mb-1">รวมจ่ายทั้งหมด</p><p class="text-3xl font-bold text-red-500">${grandTotalPaid.toLocaleString('th-TH', {minimumFractionDigits: 2})}</p><div class="w-full h-1.5 bg-red-100 mt-4 rounded-full"><div class="h-1.5 bg-red-400 rounded-full" style="width: 100%"></div></div></div><div class="bg-gradient-to-br from-sky-400 to-blue-500 p-6 rounded-2xl border border-sky-300 shadow-lg shadow-sky-200 relative overflow-hidden text-white"><div class="absolute top-0 right-0 p-4 opacity-20"><i class="fas fa-wallet text-6xl text-white"></i></div><p class="text-sky-100 font-medium mb-1">คงเหลือสุทธิ</p><p class="text-3xl font-bold text-white">${grandTotalBalance.toLocaleString('th-TH', {minimumFractionDigits: 2})}</p><p class="text-xs text-sky-200 mt-4">อัปเดตล่าสุด: ${new Date().toLocaleDateString('th-TH')}</p></div></div><div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden mb-8"><div class="px-6 py-4 border-b border-slate-100 bg-slate-50/50"><h3 class="font-bold text-slate-700">ยอดคงเหลือแยกตามรายการย่อย</h3></div><div class="overflow-x-auto"><table class="w-full text-sm"><thead class="bg-white text-slate-500 uppercase text-xs font-semibold border-b border-slate-100"><tr><th class="px-6 py-4 text-left">รายการย่อย</th><th class="px-6 py-4 text-center">จำนวนรายการ</th><th class="px-6 py-4 text-right">รับ</th><th class="px-6 py-4 text-right">จ่าย</th><th class="px-6 py-4 text-right">คงเหลือ</th><th class="px-6 py-4 text-center">รายละเอียด</th></tr></thead><tbody class="divide-y divide-slate-50">${Object.entries(summaryBySubCategory).map(([sub, data]) => `<tr class="hover:bg-pink-50/30"><td class="px-6 py-4 font-medium text-slate-700">${sub}</td><td class="px-6 py-4 text-center text-slate-400 bg-slate-50 rounded m-1">${data.count}</td><td class="px-6 py-4 text-right text-green-600 font-medium">${data.totalReceived.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-right text-red-500 font-medium">${data.totalPaid.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-right font-bold text-slate-700">${data.balance.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-center"><button onclick="showEntryForm('${register}', '${sub}')" class="text-sky-500 hover:text-sky-700 hover:underline text-xs font-medium">ตรวจสอบ</button></td></tr>`).join('')}<tr class="bg-slate-50/80 font-bold text-slate-700 border-t border-slate-200"><td class="px-6 py-4">รวมทั้งสิ้น</td><td class="px-6 py-4 text-center">${filteredRecords.length}</td><td class="px-6 py-4 text-right text-green-700">${grandTotalReceived.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-right text-red-600">${grandTotalPaid.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-right text-sky-600">${grandTotalBalance.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td></td></tr></tbody></table></div></div><div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden"><div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50"><h3 class="font-bold text-slate-700">บันทึกการเคลื่อนไหวทั้งหมด</h3><button onclick="downloadDetailedExcel('${register}')" class="text-sky-600 hover:text-sky-800 text-sm font-medium flex items-center gap-2"><i class="fas fa-download"></i> ดาวน์โหลดทั้งหมด</button></div><div class="overflow-x-auto" style="max-height: 500px;"><table class="w-full text-sm relative"><thead class="bg-white text-slate-500 uppercase text-xs font-semibold sticky top-0 z-10 border-b border-slate-200"><tr><th class="px-6 py-3 text-left bg-white">วันที่</th><th class="px-6 py-3 text-left bg-white">รายการย่อย</th><th class="px-6 py-3 text-left bg-white">รายละเอียด</th><th class="px-6 py-3 text-right bg-white">รับ</th><th class="px-6 py-3 text-right bg-white">จ่าย</th><th class="px-6 py-3 text-right bg-white">คงเหลือ</th><th class="px-6 py-3 text-center bg-white">จัดการ</th></tr></thead><tbody class="divide-y divide-slate-50">${detailedRecords.length === 0 ? `<tr><td colspan="7" class="px-6 py-10 text-center text-slate-400">ยังไม่มีรายการเคลื่อนไหว</td></tr>` : detailedRecords.map(record => `<tr class="hover:bg-pink-50/30 group"><td class="px-6 py-3 whitespace-nowrap text-slate-600">${new Date(record.date).toLocaleDateString('th-TH', {day:'2-digit', month:'2-digit', year:'2-digit'})}</td><td class="px-6 py-3 text-slate-400 font-medium text-xs">${record.sub_category}</td><td class="px-6 py-3 text-slate-700">${record.description}</td><td class="px-6 py-3 text-right text-green-600 font-medium">${record.amount_received > 0 ? record.amount_received.toLocaleString('th-TH', {minimumFractionDigits: 2}) : '-'}</td><td class="px-6 py-3 text-right text-red-500 font-medium">${record.amount_paid > 0 ? record.amount_paid.toLocaleString('th-TH', {minimumFractionDigits: 2}) : '-'}</td><td class="px-6 py-3 text-right text-slate-700 font-bold text-xs">${record.balance.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-3 text-center whitespace-nowrap"><div class="flex justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity"><button onclick="editRecord('${record.id}')" class="text-sky-500 hover:text-sky-700"><i class="fas fa-pen"></i></button><button onclick="deleteRecord('${record.id}')" class="text-pink-400 hover:text-pink-600"><i class="fas fa-trash"></i></button></div></td></tr>`).join('')}</tbody></table></div></div></div>`; }
     function downloadOverviewExcel(register) { const filteredRecords = allRecords.filter(r => r.register_type === register); if (filteredRecords.length === 0) { showToast('ไม่มีข้อมูล', 'error'); return; } let csv = `\ufeffสรุปภาพรวม: ${register}\n\nรายการย่อย,จำนวน,เงินรับ,เงินจ่าย,คงเหลือ\n`; const summaryBySubCategory = {}; registerData[register].forEach(sub => { const subRecords = filteredRecords.filter(r => r.sub_category === sub); summaryBySubCategory[sub] = { count: subRecords.length, totalReceived: subRecords.reduce((sum, r) => sum + r.amount_received, 0), totalPaid: subRecords.reduce((sum, r) => sum + r.amount_paid, 0), balance: subRecords.length > 0 ? subRecords[subRecords.length - 1].balance : 0 }; }); Object.entries(summaryBySubCategory).forEach(([sub, data]) => { csv += `"${sub}",${data.count},${data.totalReceived},${data.totalPaid},${data.balance}\n`; }); const grandTotalReceived = filteredRecords.reduce((sum, r) => sum + r.amount_received, 0); const grandTotalPaid = filteredRecords.reduce((sum, r) => sum + r.amount_paid, 0); const grandTotalBalance = Object.values(summaryBySubCategory).reduce((sum, s) => sum + s.balance, 0); csv += `\nรวม,${filteredRecords.length},${grandTotalReceived},${grandTotalPaid},${grandTotalBalance}\n`; const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' })); link.download = `สรุปยอด_${register}_${new Date().toLocaleDateString('th-TH')}.csv`; link.click(); }
     function downloadDetailedExcel(register) { const filteredRecords = allRecords.filter(r => r.register_type === register).sort((a, b) => new Date(a.date) - new Date(b.date)); if (filteredRecords.length === 0) { showToast('ไม่มีข้อมูล', 'error'); return; } let csv = `\ufeffรายละเอียด: ${register}\nวันที่,รายการย่อย,เลขที่,รายการ,รับ,จ่าย,คงเหลือ,หมายเหตุ\n`; filteredRecords.forEach(record => { csv += `${new Date(record.date).toLocaleDateString('th-TH')},"${record.sub_category}",${record.document_number},"${record.description}",${record.amount_received},${record.amount_paid},${record.balance},"${record.notes}"\n`; }); const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' })); link.download = `รายละเอียด_${register}_${new Date().toLocaleDateString('th-TH')}.csv`; link.click(); }
