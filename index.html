@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="th">
+ <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ระบบบัญชีโรงเรียน</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+  <script src="config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    const DEFAULT_REGISTER_DATA = {
+      "เงินบำรุงการศึกษา งบ 69": ["เงินค่าครูชาวต่างชาติ", "เงินค่าจ้างบุคลากร", "ห้องเรียน IEP", "ห้องเรียน สคว.", "ดอกเบี้ย"],
+      "เงินฝากคลัง (เงินนอกงบ 69)": ["เงินฝากคลังปีงบ 2568", "คุมย่อยประกันสัญญา", "คุมย่อยครูต่างชาติ", "คุมย่อยบุคลากร", "คุมย่อย สคว.", "คุมย่อย IEP", "คุมย่อยดอกเบี้ยอุดหนุน", "คุมย่อยโรงอาหาร", "คุมย่อยสมทบค่าสาธารณูปโภค", "คุมย่อยค่าใช้สถานที่", "คุมย่อยรายได้เงินดอกเบี้ย"],
+      "เงินฝากธนาคาร 5 บัญชี": ["ธนาคาร ERIC", "เงินลูกเสือ", "เงินอุดหนุนทั่วไป (สอร.)", "เอดส์", "กสศ."],
+      "เงินฝากมีวัตถุประสงค์ 69": ["เงินบริจาคมีวัตถุประสงค์"],
+      "เงินรายได้สถานศึกษา 69": ["เงินสมทบค่าสาธารณูปโภค", "เงินบำรุงโรงอาหาร", "เงินค่าสถานที่", "เงินดอกเบี้ยธนาคาร"],
+      "เงินสดในมือ 69": ["เงินสดในมือ"],
+      "เงินอุดหนุนเรียนฟรี 15 ปี งบ 69": ["ทะเบียนคุมเงินรายหัว", "เงินค่ากิจกรรมพัฒน์", "เงินค่าเครื่องแบบ (1)", "เงินค่าเครื่องแบบ (2)", "เงินปัจจัยพื้นฐาน", "เงินค่าหนังสือเรียน", "ดอกเบี้ยเงินฝาก"]
+    };
+
+    function getSupabaseClient() {
+      const cfg = window.APP_CONFIG || {};
+      if (!cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY || cfg.SUPABASE_URL.includes('YOUR_')) {
+        throw new Error('ยังไม่ได้ตั้งค่า Supabase ในไฟล์ config.js');
+      }
+      return window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
+    }
+
+    const db = getSupabaseClient();
+
+    async function seedDefaultConfigIfEmpty() {
+      const { data, error } = await db.from('registers').select('name').limit(1);
+      if (error) throw error;
+      if (data && data.length > 0) return;
+      const registers = Object.keys(DEFAULT_REGISTER_DATA).map((name, i) => ({ name, sort_order: i + 1 }));
+      const { error: regError } = await db.from('registers').insert(registers);
+      if (regError) throw regError;
+      const subRows = [];
+      Object.entries(DEFAULT_REGISTER_DATA).forEach(([register_name, items]) => {
+        items.forEach((name, i) => subRows.push({ register_name, name, sort_order: i + 1 }));
+      });
+      if (subRows.length) {
+        const { error: subError } = await db.from('sub_items').insert(subRows);
+        if (subError) throw subError;
+      }
+      await db.from('settings').upsert([
+        { key: 'system_title', value: 'ระบบบัญชีโรงเรียน' },
+        { key: 'school_name', value: 'โรงเรียนตัวอย่าง' }
+      ]);
+    }
+
+    window.dataSdk = {
+      init: async function(handler) {
+        try {
+          await seedDefaultConfigIfEmpty();
+          const settings = await this.getSettings();
+          handler.onSettingsLoaded(settings);
+          const config = await this.getConfig();
+          handler.onConfigLoaded(config);
+          const data = await this.getRecords();
+          handler.onDataChanged(data);
+        } catch (e) {
+          console.error(e);
+          document.getElementById('main-content').innerHTML = `<div class="max-w-3xl mx-auto bg-red-50 border border-red-200 text-red-700 rounded-2xl p-6"><b>เชื่อมต่อ Supabase ไม่สำเร็จ</b><br>${e.message || e}</div>`;
+        }
+      },
+      getRecords: async function() {
+        const { data, error } = await db.from('records').select('*').order('date', { ascending: true }).order('created_at', { ascending: true });
+        if (error) throw error;
+        return (data || []).map(r => ({
+          id: String(r.id), register_type: r.register_type, sub_category: r.sub_category,
+          date: r.date, document_number: r.document_number || '', description: r.description || '',
+          amount_received: Number(r.amount_received || 0), amount_paid: Number(r.amount_paid || 0),
+          balance: Number(r.balance || 0), notes: r.notes || '', created_at: r.created_at
+        }));
+      },
+      create: async function(record) {
+        const payload = {
+          id: record.id, register_type: record.register_type, sub_category: record.sub_category, date: record.date,
+          document_number: record.document_number, description: record.description,
+          amount_received: Number(record.amount_received || 0), amount_paid: Number(record.amount_paid || 0),
+          balance: Number(record.balance || 0), notes: record.notes || '', created_at: record.created_at || new Date().toISOString()
+        };
+        const { error } = await db.from('records').insert(payload);
+        return error ? { isOk: false, message: error.message } : { isOk: true };
+      },
+      update: async function(record) {
+        const payload = {
+          register_type: record.register_type, sub_category: record.sub_category, date: record.date,
+          document_number: record.document_number, description: record.description,
+          amount_received: Number(record.amount_received || 0), amount_paid: Number(record.amount_paid || 0),
+          balance: Number(record.balance || 0), notes: record.notes || '', updated_at: new Date().toISOString()
+        };
+        const { error } = await db.from('records').update(payload).eq('id', record.id);
+        return error ? { isOk: false, message: error.message } : { isOk: true };
+      },
+      delete: async function(id) {
+        const { error } = await db.from('records').delete().eq('id', id);
+        return error ? { isOk: false, message: error.message } : { isOk: true };
+      },
+      getConfig: async function() {
+        const { data: regs, error: regError } = await db.from('registers').select('name, sort_order').order('sort_order', { ascending: true });
+        if (regError) throw regError;
+        const { data: subs, error: subError } = await db.from('sub_items').select('register_name, name, sort_order').order('sort_order', { ascending: true });
+        if (subError) throw subError;
+        const result = {};
+        (regs || []).forEach(r => result[r.name] = []);
+        (subs || []).forEach(s => { if (!result[s.register_name]) result[s.register_name] = []; result[s.register_name].push(s.name); });
+        return result;
+      },
+      addRegister: async function(name) {
+        const { count } = await db.from('registers').select('*', { count: 'exact', head: true });
+        const { error } = await db.from('registers').insert({ name, sort_order: (count || 0) + 1 });
+        return error ? { isOk: false, message: error.message } : { isOk: true };
+      },
+      addSubItem: async function(registerName, subName) {
+        const { count } = await db.from('sub_items').select('*', { count: 'exact', head: true }).eq('register_name', registerName);
+        const { error } = await db.from('sub_items').insert({ register_name: registerName, name: subName, sort_order: (count || 0) + 1 });
+        return error ? { isOk: false, message: error.message } : { isOk: true };
+      },
+      getSettings: async function() {
+        const { data, error } = await db.from('settings').select('key,value');
+        if (error) throw error;
+        const settings = { system_title: 'ระบบบัญชีโรงเรียน', school_name: 'โรงเรียนตัวอย่าง' };
+        (data || []).forEach(row => settings[row.key] = row.value);
+        return settings;
+      },
+      saveSettings: async function(settings) {
+        const { error } = await db.from('settings').upsert([
+          { key: 'system_title', value: settings.system_title },
+          { key: 'school_name', value: settings.school_name }
+        ]);
+        return error ? { isOk: false, message: error.message } : { isOk: true };
+      },
+      backup: async function() {
+        try {
+          const payload = { created_at: new Date().toISOString(), settings: await this.getSettings(), config: await this.getConfig(), records: await this.getRecords() };
+          const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const name = `Backup_SchoolAccounting_${new Date().toISOString().slice(0,16).replace('T','_').replace(':','-')}.json`;
+          const a = document.createElement('a'); a.href = url; a.download = name; a.click();
+          return { isOk: true, url, name };
+        } catch (e) { return { isOk: false, message: e.message || String(e) }; }
+      }
+    };
+
+    window.elementSdk = {
+      init: function(options) { if (options && options.onConfigChange) { options.onConfigChange(options.defaultConfig); } },
+      setConfig: function(config) { }
+    };
+  </script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    body { font-family: 'Sarabun', sans-serif; background: linear-gradient(135deg, #fff1f2 0%, #eff6ff 100%); color: #475569; }
+    .card { transition: all 0.3s ease; border: 1px solid #fce7f3; background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(4px); }
+    .card:hover { transform: translateY(-3px); box-shadow: 0 10px 25px rgba(236, 72, 153, 0.1); border-color: #fbcfe8; }
+    .input-field { transition: all 0.2s ease; border: 1px solid #e2e8f0; background-color: #fff; }
+    .input-field:focus { outline: none; border-color: #f472b6; box-shadow: 0 0 0 3px rgba(244, 114, 182, 0.2); }
+    .table-header { background-color: #f0f9ff; border-bottom: 2px solid #bae6fd; color: #0284c7; font-weight: 600; }
+    .table-row { border-bottom: 1px solid #f1f5f9; transition: background-color 0.1s; }
+    .table-row:hover { background-color: #fff1f2; }
+    .fade-in { animation: fadeIn 0.5s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
+    .loading-spinner { border: 3px solid #fce7f3; border-top: 3px solid #ec4899; border-radius: 50%; width: 24px; height: 24px; animation: spin 0.8s linear infinite; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    .toast { position: fixed; top: 20px; right: 20px; padding: 16px 24px; background: white; border-radius: 12px; box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08); border-left: 5px solid #f472b6; z-index: 1000; animation: slideIn 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55); font-family: 'Sarabun', sans-serif; }
+    @keyframes slideIn { from { transform: translateX(400px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    
+    /* Modal Styles */
+    .modal-backdrop { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.3); backdrop-filter: blur(2px); display: flex; align-items: center; justify-content: center; z-index: 999; opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
+    .modal-backdrop.active { opacity: 1; pointer-events: auto; }
+    .modal-content { background: white; border-radius: 16px; padding: 24px; width: 90%; max-width: 400px; box-shadow: 0 20px 50px rgba(0,0,0,0.1); transform: scale(0.95); transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
+    .modal-backdrop.active .modal-content { transform: scale(1); }
+  </style>
+ </head>
+ <body class="min-h-screen">
+  <div id="app" class="min-h-full p-6 md:p-10">
+   <header class="mb-8 fade-in">
+    <div class="bg-white/90 backdrop-blur-sm rounded-2xl shadow-sm p-6 border border-pink-100 flex items-center justify-between">
+     <div class="flex items-center gap-5">
+      <div class="w-16 h-16 bg-gradient-to-br from-pink-100 to-blue-100 rounded-2xl flex items-center justify-center shadow-inner text-pink-500">
+        <i class="fas fa-school text-3xl"></i>
+      </div>
+      <div>
+       <h1 id="display-system-title" class="text-2xl font-bold text-slate-700 tracking-tight">ระบบบัญชีโรงเรียน</h1>
+       <div class="flex items-center gap-2 mt-1">
+         <span class="w-2 h-2 rounded-full bg-sky-400"></span>
+         <p id="display-school-name" class="text-sm text-slate-500">โรงเรียนตัวอย่าง</p>
+       </div>
+      </div>
+     </div>
+     <div class="flex items-center gap-3">
+        <button onclick="backupData()" id="backup-btn" class="w-10 h-10 rounded-xl bg-slate-50 text-slate-400 hover:bg-sky-50 hover:text-sky-500 flex items-center justify-center transition-all shadow-sm border border-slate-100" title="สำรองข้อมูลเป็นไฟล์ JSON">
+            <i class="fas fa-cloud-upload-alt text-lg"></i>
+        </button>
+        
+        <button onclick="openSettingsModal()" class="w-10 h-10 rounded-xl bg-slate-50 text-slate-400 hover:bg-pink-50 hover:text-pink-500 flex items-center justify-center transition-all shadow-sm border border-slate-100" title="ตั้งค่าระบบ">
+            <i class="fas fa-cog text-lg"></i>
+        </button>
+        <button id="back-btn" class="hidden px-5 py-2.5 bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-pink-500 rounded-xl transition-all shadow-sm font-medium flex items-center gap-2 group">
+            <i class="fas fa-arrow-left text-sm group-hover:-translate-x-1 transition-transform"></i> กลับเมนูหลัก
+        </button>
+     </div>
+    </div>
+   </header>
+   
+   <main id="main-content" class="fade-in">
+       <div class="flex flex-col items-center justify-center py-20 text-slate-400">
+           <div class="loading-spinner mb-4"></div>
+           <p>กำลังโหลดข้อมูล...</p>
+       </div>
+   </main>
+  </div>
+
+  <div id="settings-modal" class="modal-backdrop">
+      <div class="modal-content">
+          <div class="flex justify-between items-center mb-6">
+              <h3 class="text-xl font-bold text-slate-700"><i class="fas fa-sliders mr-2 text-pink-400"></i>ตั้งค่าระบบ</h3>
+              <button onclick="closeSettingsModal()" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times"></i></button>
+          </div>
+          <form id="settings-form" onsubmit="saveSettings(event)">
+              <div class="mb-4">
+                  <label class="block text-sm font-medium text-slate-600 mb-2">ชื่อระบบ / โปรแกรม</label>
+                  <input type="text" id="input-system-title" class="input-field w-full px-4 py-2.5 rounded-xl text-slate-700" required>
+              </div>
+              <div class="mb-6">
+                  <label class="block text-sm font-medium text-slate-600 mb-2">ชื่อโรงเรียน / หน่วยงาน</label>
+                  <input type="text" id="input-school-name" class="input-field w-full px-4 py-2.5 rounded-xl text-slate-700" required>
+              </div>
+              <button type="submit" class="w-full py-3 bg-pink-400 hover:bg-pink-500 text-white rounded-xl font-medium shadow-lg shadow-pink-200 transition-all">บันทึกการตั้งค่า</button>
+          </form>
+      </div>
+  </div>
+
+  <script>
+    const defaultConfig = { system_title: "ระบบบัญชีโรงเรียน", school_name: "โรงเรียนตัวอย่าง" };
+    let currentView = 'main';
+    let selectedRegister = null;
+    let selectedSubCategory = null;
+    let allRecords = [];
+    let registerData = {}; 
+    let systemSettings = {};
+    let isEditing = false;
+    let editingRecordId = null;
+
+    function showToast(message, type = 'success') {
+      const toast = document.createElement('div');
+      toast.className = 'toast';
+      if(type === 'error') {
+          toast.style.borderLeftColor = '#ef4444';
+          toast.innerHTML = `<div class="flex items-center gap-3"><i class="fas fa-circle-xmark text-red-500 text-xl"></i><span class="text-slate-700 font-medium">${message}</span></div>`;
+      } else {
+          toast.style.borderLeftColor = '#f472b6';
+          toast.innerHTML = `<div class="flex items-center gap-3"><i class="fas fa-circle-check text-pink-500 text-xl"></i><span class="text-slate-700 font-medium">${message}</span></div>`;
+      }
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 3000);
+    }
+    
+    // --- Backup Logic ---
+    function backupData() {
+        if(!confirm('คุณต้องการดาวน์โหลดไฟล์สำรองข้อมูล JSON ใช่หรือไม่?')) return;
+        
+        const btn = document.getElementById('backup-btn');
+        const originalContent = btn.innerHTML;
+        btn.innerHTML = '<div class="loading-spinner w-5 h-5 border-2 border-slate-300 border-t-sky-500"></div>';
+        btn.disabled = true;
+        
+        window.dataSdk.backup().then(res => {
+            btn.innerHTML = originalContent;
+            btn.disabled = false;
+            
+            if (res.isOk) {
+                showToast('ดาวน์โหลดไฟล์สำรองข้อมูลเสร็จสิ้น!');
+                // ถ้าต้องการให้เปิดไฟล์ Backup ทันที: window.open(res.url, '_blank');
+            } else {
+                showToast('เกิดข้อผิดพลาด: ' + res.message, 'error');
+            }
+        });
+    }
+
+    // --- Settings Logic ---
+    function openSettingsModal() {
+        document.getElementById('input-system-title').value = systemSettings.system_title || defaultConfig.system_title;
+        document.getElementById('input-school-name').value = systemSettings.school_name || defaultConfig.school_name;
+        document.getElementById('settings-modal').classList.add('active');
+    }
+    function closeSettingsModal() { document.getElementById('settings-modal').classList.remove('active'); }
+    function saveSettings(e) {
+        e.preventDefault();
+        const newSettings = { system_title: document.getElementById('input-system-title').value, school_name: document.getElementById('input-school-name').value };
+        const btn = e.target.querySelector('button');
+        const originalText = btn.innerText;
+        btn.innerText = 'กำลังบันทึก...';
+        btn.disabled = true;
+        window.dataSdk.saveSettings(newSettings).then(res => {
+            btn.innerText = originalText; btn.disabled = false;
+            if (res.isOk) { systemSettings = newSettings; updateHeaderDisplay(); closeSettingsModal(); showToast('บันทึกการตั้งค่าเรียบร้อยแล้ว'); } 
+            else { showToast('บันทึกไม่สำเร็จ: ' + res.message, 'error'); }
+        });
+    }
+    function updateHeaderDisplay() {
+        document.getElementById('display-system-title').textContent = systemSettings.system_title;
+        document.getElementById('display-school-name').textContent = systemSettings.school_name;
+        document.title = systemSettings.system_title;
+    }
+
+    // --- Main Render Logic ---
+    function renderMainMenu() {
+      currentView = 'main';
+      isEditing = false;
+      document.getElementById('back-btn').classList.add('hidden');
+      const registers = Object.keys(registerData);
+      
+      document.getElementById('main-content').innerHTML = `
+        <div class="max-w-7xl mx-auto">
+          <div class="mb-8 pb-4 border-b border-slate-200/60">
+            <h2 class="text-xl font-bold text-slate-700 mb-2"><i class="fas fa-book-open text-sky-400 mr-2"></i>เลือกทะเบียนคุมบัญชี</h2>
+            <p class="text-slate-500">กรุณาเลือกประเภทบัญชีที่ต้องการดำเนินการ</p>
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            ${registers.map((register, index) => `
+              <div class="card rounded-2xl p-6 cursor-pointer group relative overflow-hidden" onclick="showSubMenu('${register}')">
+                <div class="absolute top-0 left-0 w-1.5 h-full ${index % 2 === 0 ? 'bg-pink-400' : 'bg-sky-400'} transform transition-transform group-hover:scale-y-110"></div>
+                <div class="flex items-start gap-5 pl-2">
+                  <div class="w-14 h-14 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors shadow-sm ${index % 2 === 0 ? 'bg-pink-50 text-pink-500 group-hover:bg-pink-100' : 'bg-sky-50 text-sky-500 group-hover:bg-sky-100'}">
+                    <i class="fas fa-${['book', 'landmark', 'vault', 'hand-holding-dollar', 'coins', 'wallet', 'graduation-cap'][index % 7]} text-2xl"></i>
+                  </div>
+                  <div class="flex-1 min-w-0 pt-1">
+                    <h3 class="font-bold text-slate-700 mb-1 text-lg leading-tight group-hover:text-slate-900 transition-colors">${register}</h3>
+                    <p class="text-sm text-slate-400 mt-2 flex items-center gap-2">
+                      <span class="px-2 py-0.5 rounded-full text-xs font-medium ${index % 2 === 0 ? 'bg-pink-50 text-pink-600' : 'bg-sky-50 text-sky-600'}">${registerData[register].length} รายการ</span>
+                    </p>
+                  </div>
+                </div>
+              </div>
+            `).join('')}
+            <div class="card rounded-2xl p-6 cursor-pointer group border-2 border-dashed border-slate-300 hover:border-sky-400 bg-transparent hover:bg-sky-50/50 flex flex-col items-center justify-center text-slate-400 hover:text-sky-500 transition-all" onclick="promptAddRegister()">
+                <div class="w-12 h-12 rounded-full bg-slate-100 group-hover:bg-sky-100 flex items-center justify-center mb-3 transition-colors"><i class="fas fa-plus text-xl"></i></div>
+                <span class="font-medium">เพิ่มทะเบียนใหม่</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function showSubMenu(register) {
+      currentView = 'submenu'; selectedRegister = register; isEditing = false; document.getElementById('back-btn').classList.remove('hidden');
+      const subItems = registerData[register] || [];
+      document.getElementById('main-content').innerHTML = `
+        <div class="max-w-7xl mx-auto">
+          <div class="mb-8 flex items-center justify-between flex-wrap gap-4 pb-4 border-b border-slate-200/60">
+            <div><h2 class="text-xl font-bold text-slate-700 mb-1">${register}</h2><p class="text-slate-500">เลือกรายการย่อยเพื่อบันทึกหรือตรวจสอบข้อมูล</p></div>
+            <button onclick="showOverview('${register}')" class="px-5 py-2.5 bg-sky-400 hover:bg-sky-500 text-white rounded-xl flex items-center gap-2 transition-colors shadow-md shadow-sky-200 font-medium"><i class="fas fa-chart-pie text-sm"></i><span>ภาพรวม</span></button>
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            ${subItems.map((sub, index) => `<div class="card bg-white/80 rounded-xl p-5 cursor-pointer hover:border-sky-300" onclick="showEntryForm('${register}', '${sub}')"><div class="flex items-center justify-between"><div class="flex items-center gap-4"><div class="w-10 h-10 bg-gradient-to-br from-pink-50 to-sky-50 rounded-lg flex items-center justify-center text-slate-500 font-bold text-sm border border-white shadow-sm">${index + 1}</div><span class="font-semibold text-slate-700">${sub}</span></div><div class="w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center text-slate-300"><i class="fas fa-chevron-right text-xs"></i></div></div></div>`).join('')}
+            <div class="card rounded-xl p-5 cursor-pointer border-2 border-dashed border-slate-300 hover:border-pink-400 bg-transparent hover:bg-pink-50/50 flex items-center justify-center gap-3 text-slate-400 hover:text-pink-500 transition-all" onclick="promptAddSubItem('${register}')"><i class="fas fa-plus-circle text-xl"></i><span class="font-medium">เพิ่มรายการย่อย</span></div>
+          </div>
+        </div>
+      `;
+    }
+    function promptAddRegister() { const name = prompt("กรุณากรอกชื่อทะเบียนคุมบัญชีใหม่:"); if (name && name.trim() !== "") { window.dataSdk.addRegister(name.trim()).then(res => { if (res.isOk) { registerData[name.trim()] = []; showToast("เพิ่มทะเบียนเรียบร้อยแล้ว"); renderMainMenu(); } else { showToast("เกิดข้อผิดพลาด: " + res.message, 'error'); }}); }}
+    function promptAddSubItem(registerName) { const name = prompt(`กรุณากรอกชื่อรายการย่อยสำหรับ "${registerName}":`); if (name && name.trim() !== "") { window.dataSdk.addSubItem(registerName, name.trim()).then(res => { if (res.isOk) { registerData[registerName].push(name.trim()); showToast("เพิ่มรายการย่อยเรียบร้อยแล้ว"); showSubMenu(registerName); } else { showToast("เกิดข้อผิดพลาด: " + res.message, 'error'); }}); }}
+
+    // Reuse existing ShowEntry, Form, Overview, Logic (same as previous step, just minified here for space, but FULL code in actual response)
+    function showEntryForm(register, subCategory) {
+      currentView = 'entry'; selectedRegister = register; selectedSubCategory = subCategory; document.getElementById('back-btn').classList.remove('hidden');
+      const filteredRecords = allRecords.filter(r => r.register_type === register && r.sub_category === subCategory);
+      const latestBalance = filteredRecords.length > 0 ? filteredRecords[filteredRecords.length - 1].balance : 0;
+      document.getElementById('main-content').innerHTML = `<div class="max-w-7xl mx-auto space-y-8"><div class="bg-white/90 backdrop-blur rounded-2xl shadow-sm border border-pink-100 overflow-hidden" id="form-container"><div class="bg-gradient-to-r from-pink-50 to-white px-6 py-4 border-b border-pink-100 flex justify-between items-center"><div><h3 class="font-bold text-slate-700 text-lg" id="form-title"><i class="fas fa-pen-to-square mr-2 text-pink-500"></i>บันทึกข้อมูลรายวัน</h3><p class="text-sm text-pink-400 mt-1 font-medium">${subCategory}</p></div><button id="cancel-edit-btn" class="hidden px-4 py-1.5 text-sm text-red-500 border border-red-100 bg-red-50 rounded-lg hover:bg-red-100 transition-colors font-medium"><i class="fas fa-times mr-1"></i> ยกเลิก</button></div><div class="p-6"><form id="entry-form"><div class="grid grid-cols-1 md:grid-cols-12 gap-6 mb-6"><div class="md:col-span-2"><label class="block text-sm font-semibold text-slate-600 mb-2">วันที่</label><input type="date" id="date-input" required class="input-field w-full px-3 py-2.5 rounded-xl text-slate-700"></div><div class="md:col-span-3"><label class="block text-sm font-semibold text-slate-600 mb-2">เลขที่เอกสาร</label><input type="text" id="doc-number" required placeholder="ระบุเลขที่" class="input-field w-full px-3 py-2.5 rounded-xl text-slate-700"></div><div class="md:col-span-7"><label class="block text-sm font-semibold text-slate-600 mb-2">รายการ</label><input type="text" id="description" required placeholder="ระบุรายละเอียดรายการ" class="input-field w-full px-3 py-2.5 rounded-xl text-slate-700"></div></div><div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6 pb-6 border-b border-slate-50"><div><label class="block text-sm font-semibold text-slate-600 mb-2 text-green-600"><i class="fas fa-plus-circle mr-1"></i>รับ (บาท)</label><input type="number" id="amount-received" min="0" step="0.01" placeholder="0.00" class="input-field w-full px-3 py-2.5 rounded-xl text-slate-700 border-green-100 focus:border-green-400 focus:shadow-none"></div><div><label class="block text-sm font-semibold text-slate-600 mb-2 text-red-500"><i class="fas fa-minus-circle mr-1"></i>จ่าย (บาท)</label><input type="number" id="amount-paid" min="0" step="0.01" placeholder="0.00" class="input-field w-full px-3 py-2.5 rounded-xl text-slate-700 border-red-100 focus:border-red-400 focus:shadow-none"></div><div><label class="block text-sm font-semibold text-slate-600 mb-2">หมายเหตุ</label><input type="text" id="notes" placeholder="ระบุหมายเหตุ" class="input-field w-full px-3 py-2.5 rounded-xl text-slate-700"></div></div><div class="flex items-center justify-between bg-blue-50/50 p-4 rounded-xl border border-blue-50"><div class="flex items-center gap-3"><div class="bg-white p-2.5 rounded-full text-sky-500 shadow-sm"><i class="fas fa-wallet"></i></div><div><p class="text-xs text-sky-500 font-bold uppercase tracking-wider">ยอดคงเหลือล่าสุด</p><p class="text-xl font-bold text-slate-700">${latestBalance.toLocaleString('th-TH', {minimumFractionDigits: 2})} <span class="text-sm font-normal text-slate-400">บาท</span></p></div></div><button type="submit" id="save-btn" class="bg-pink-400 hover:bg-pink-500 text-white font-medium py-2.5 px-6 rounded-xl flex items-center gap-2 transition-all shadow-md shadow-pink-200 transform active:scale-95"><i class="fas fa-save"></i><span id="save-btn-text">บันทึกข้อมูล</span></button></div></form></div></div><div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden"><div class="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-white"><div><h3 class="font-bold text-slate-700 text-lg">รายการเดินบัญชี</h3><p class="text-sm text-slate-400">ข้อมูลทั้งหมด ${filteredRecords.length} รายการ</p></div><button onclick="downloadExcel()" class="px-4 py-2 bg-white border border-slate-200 text-slate-600 hover:border-green-500 hover:text-green-600 rounded-lg flex items-center gap-2 transition-colors font-medium text-sm"><i class="fas fa-file-excel"></i><span>Export Excel</span></button></div><div class="overflow-x-auto"><table class="w-full text-sm text-left"><thead class="table-header text-sky-600 bg-sky-50/50 uppercase text-xs tracking-wider"><tr><th class="px-6 py-4 font-bold border-b-2 border-sky-100">วันที่</th><th class="px-6 py-4 font-bold border-b-2 border-sky-100">เลขที่</th><th class="px-6 py-4 font-bold border-b-2 border-sky-100 w-1/3">รายการ</th><th class="px-6 py-4 font-bold border-b-2 border-sky-100 text-right text-green-600">รับ</th><th class="px-6 py-4 font-bold border-b-2 border-sky-100 text-right text-red-500">จ่าย</th><th class="px-6 py-4 font-bold border-b-2 border-sky-100 text-right text-sky-600">คงเหลือ</th><th class="px-6 py-4 font-bold border-b-2 border-sky-100">หมายเหตุ</th><th class="px-6 py-4 font-bold border-b-2 border-sky-100 text-center">จัดการ</th></tr></thead><tbody class="divide-y divide-slate-50">${filteredRecords.length === 0 ? `<tr><td colspan="8" class="px-6 py-12 text-center text-slate-400">ยังไม่มีรายการบัญชี</td></tr>` : filteredRecords.map(record => `<tr class="table-row group"><td class="px-6 py-4 font-medium text-slate-600 whitespace-nowrap">${new Date(record.date).toLocaleDateString('th-TH', {year:'numeric', month:'2-digit', day:'2-digit'})}</td><td class="px-6 py-4 text-slate-500 font-mono text-xs bg-slate-50/50 rounded">${record.document_number}</td><td class="px-6 py-4 text-slate-700 font-medium">${record.description}</td><td class="px-6 py-4 text-right text-green-600 font-medium tracking-wide">${record.amount_received > 0 ? record.amount_received.toLocaleString('th-TH', {minimumFractionDigits: 2}) : '-'}</td><td class="px-6 py-4 text-right text-red-500 font-medium tracking-wide">${record.amount_paid > 0 ? record.amount_paid.toLocaleString('th-TH', {minimumFractionDigits: 2}) : '-'}</td><td class="px-6 py-4 text-right font-bold text-slate-700 tracking-wide bg-sky-50/30 rounded-lg">${record.balance.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-slate-400 text-xs italic">${record.notes || '-'}</td><td class="px-6 py-4 text-center whitespace-nowrap"><div class="flex items-center justify-center gap-2 opacity-60 group-hover:opacity-100 transition-opacity"><button onclick="editRecord('${record.id}')" class="w-8 h-8 rounded-lg flex items-center justify-center text-sky-500 hover:bg-sky-50 transition-colors"><i class="fas fa-pen"></i></button><button onclick="deleteRecord('${record.id}')" class="w-8 h-8 rounded-lg flex items-center justify-center text-pink-400 hover:bg-pink-50 hover:text-pink-600 transition-colors"><i class="fas fa-trash-can"></i></button></div></td></tr>`).join('')}</tbody></table></div></div></div>`;
+      setupFormListeners();
+      if (isEditing && editingRecordId) { const record = allRecords.find(r => r.id === editingRecordId); if (record) populateForm(record); }
+    }
+    function populateForm(record) { document.getElementById('form-title').innerHTML = `<i class="fas fa-edit mr-2 text-amber-500"></i>แก้ไขข้อมูล`; document.getElementById('save-btn-text').textContent = "บันทึกการแก้ไข"; const btn = document.getElementById('save-btn'); btn.className = "bg-amber-400 hover:bg-amber-500 text-white font-medium py-2.5 px-6 rounded-xl flex items-center gap-2 transition-all shadow-md shadow-amber-200"; document.getElementById('cancel-edit-btn').classList.remove('hidden'); document.getElementById('date-input').value = record.date; document.getElementById('doc-number').value = record.document_number; document.getElementById('description').value = record.description; document.getElementById('amount-received').value = record.amount_received || ''; document.getElementById('amount-paid').value = record.amount_paid || ''; document.getElementById('notes').value = record.notes; document.getElementById('form-container').scrollIntoView({ behavior: 'smooth', block: 'center' }); document.getElementById('form-container').classList.add('ring-4', 'ring-amber-100'); setTimeout(() => document.getElementById('form-container').classList.remove('ring-4', 'ring-amber-100'), 1000); }
+    function editRecord(id) { if(currentView === 'overview') { const record = allRecords.find(r => r.id === id); if(record){ showEntryForm(record.register_type, record.sub_category); setTimeout(() => editRecord(id), 100); return; }} isEditing=true; editingRecordId=id; const record=allRecords.find(r=>r.id===id); if(record) populateForm(record); }
+    function cancelEdit() { isEditing=false; editingRecordId=null; document.getElementById('entry-form').reset(); document.getElementById('form-title').innerHTML = `<i class="fas fa-pen-to-square mr-2 text-pink-500"></i>บันทึกข้อมูลรายวัน`; document.getElementById('save-btn-text').textContent = "บันทึกข้อมูล"; const btn = document.getElementById('save-btn'); btn.className = "bg-pink-400 hover:bg-pink-500 text-white font-medium py-2.5 px-6 rounded-xl flex items-center gap-2 transition-all shadow-md shadow-pink-200"; document.getElementById('cancel-edit-btn').classList.add('hidden'); }
+    function deleteRecord(id) { if(!confirm('ยืนยันการลบรายการนี้?')) return; window.dataSdk.delete(id).then(result => { if(result.isOk) { showToast('ลบรายการเรียบร้อยแล้ว'); allRecords = allRecords.filter(r => r.id !== id); dataHandler.onDataChanged(allRecords); } else { showToast('เกิดข้อผิดพลาด', 'error'); }}); }
+    function setupFormListeners() { const form = document.getElementById('entry-form'); const cancelBtn = document.getElementById('cancel-edit-btn'); if(cancelBtn) cancelBtn.addEventListener('click', (e) => { e.preventDefault(); cancelEdit(); }); form.addEventListener('submit', async (e) => { e.preventDefault(); const saveBtn = document.getElementById('save-btn'); saveBtn.disabled = true; saveBtn.innerHTML = '<div class="loading-spinner mx-auto"></div>'; const received = parseFloat(document.getElementById('amount-received').value) || 0; const paid = parseFloat(document.getElementById('amount-paid').value) || 0; const recordData = { id: isEditing ? editingRecordId : `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, register_type: selectedRegister, sub_category: selectedSubCategory, date: document.getElementById('date-input').value, document_number: document.getElementById('doc-number').value, description: document.getElementById('description').value, amount_received: received, amount_paid: paid, balance: 0, notes: document.getElementById('notes').value, created_at: isEditing ? undefined : new Date().toISOString() }; let result; if (isEditing) { result = await window.dataSdk.update(recordData); } else { result = await window.dataSdk.create(recordData); } saveBtn.disabled = false; saveBtn.innerHTML = isEditing ? `<i class="fas fa-save"></i><span id="save-btn-text">บันทึกการแก้ไข</span>` : `<i class="fas fa-save"></i><span id="save-btn-text">บันทึกข้อมูล</span>`; if (result.isOk) { showToast(isEditing ? 'แก้ไขข้อมูลสำเร็จ' : 'บันทึกข้อมูลสำเร็จ'); form.reset(); if(isEditing) cancelEdit(); window.dataSdk.init(dataHandler); } else { showToast(result.message || 'เกิดข้อผิดพลาด', 'error'); } }); }
+    function downloadExcel() { const filteredRecords = allRecords.filter(r => r.register_type === selectedRegister && r.sub_category === selectedSubCategory); if (filteredRecords.length === 0) { showToast('ไม่มีข้อมูลให้ดาวน์โหลด', 'error'); return; } let csv = '\ufeffวันที่,เลขที่เอกสาร,รายการ,จำนวนเงินรับ,จำนวนเงินจ่าย,ยอดคงเหลือ,หมายเหตุ\n'; filteredRecords.forEach(record => { csv += `${new Date(record.date).toLocaleDateString('th-TH')},${record.document_number},"${record.description}",${record.amount_received},${record.amount_paid},${record.balance},"${record.notes}"\n`; }); const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' })); link.download = `บัญชี_${selectedRegister}_${selectedSubCategory}_${new Date().toLocaleDateString('th-TH')}.csv`; link.click(); }
+    function showOverview(register) { currentView = 'overview'; selectedRegister = register; document.getElementById('back-btn').classList.remove('hidden'); const filteredRecords = allRecords.filter(r => r.register_type === register); const summaryBySubCategory = {}; registerData[register].forEach(sub => { const subRecords = filteredRecords.filter(r => r.sub_category === sub); summaryBySubCategory[sub] = { count: subRecords.length, totalReceived: subRecords.reduce((sum, r) => sum + r.amount_received, 0), totalPaid: subRecords.reduce((sum, r) => sum + r.amount_paid, 0), balance: subRecords.length > 0 ? subRecords[subRecords.length - 1].balance : 0 }; }); const grandTotalReceived = filteredRecords.reduce((sum, r) => sum + r.amount_received, 0); const grandTotalPaid = filteredRecords.reduce((sum, r) => sum + r.amount_paid, 0); const grandTotalBalance = Object.values(summaryBySubCategory).reduce((sum, s) => sum + s.balance, 0); const detailedRecords = filteredRecords.sort((a, b) => new Date(a.date) - new Date(b.date)); document.getElementById('main-content').innerHTML = `<div class="max-w-7xl mx-auto"><div class="mb-8 flex items-center justify-between flex-wrap gap-4 border-b border-slate-200/60 pb-4"><div><h2 class="text-xl font-bold text-slate-700 mb-1">สรุปภาพรวม: ${register}</h2><p class="text-slate-500">สถานะการเงินปัจจุบัน</p></div><button onclick="downloadOverviewExcel('${register}')" class="px-5 py-2.5 bg-white border border-green-500 text-green-600 hover:bg-green-50 rounded-xl flex items-center gap-2 transition-colors shadow-sm font-medium"><i class="fas fa-file-csv"></i><span>ดาวน์โหลดรายงานสรุป</span></button></div><div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8"><div class="bg-white p-6 rounded-2xl border border-green-100 shadow-sm relative overflow-hidden"><div class="absolute top-0 right-0 p-4 opacity-20"><i class="fas fa-circle-down text-6xl text-green-400"></i></div><p class="text-slate-500 font-medium mb-1">รวมรับทั้งหมด</p><p class="text-3xl font-bold text-green-600">${grandTotalReceived.toLocaleString('th-TH', {minimumFractionDigits: 2})}</p><div class="w-full h-1.5 bg-green-100 mt-4 rounded-full"><div class="h-1.5 bg-green-500 rounded-full" style="width: 100%"></div></div></div><div class="bg-white p-6 rounded-2xl border border-red-100 shadow-sm relative overflow-hidden"><div class="absolute top-0 right-0 p-4 opacity-20"><i class="fas fa-circle-up text-6xl text-red-400"></i></div><p class="text-slate-500 font-medium mb-1">รวมจ่ายทั้งหมด</p><p class="text-3xl font-bold text-red-500">${grandTotalPaid.toLocaleString('th-TH', {minimumFractionDigits: 2})}</p><div class="w-full h-1.5 bg-red-100 mt-4 rounded-full"><div class="h-1.5 bg-red-400 rounded-full" style="width: 100%"></div></div></div><div class="bg-gradient-to-br from-sky-400 to-blue-500 p-6 rounded-2xl border border-sky-300 shadow-lg shadow-sky-200 relative overflow-hidden text-white"><div class="absolute top-0 right-0 p-4 opacity-20"><i class="fas fa-wallet text-6xl text-white"></i></div><p class="text-sky-100 font-medium mb-1">คงเหลือสุทธิ</p><p class="text-3xl font-bold text-white">${grandTotalBalance.toLocaleString('th-TH', {minimumFractionDigits: 2})}</p><p class="text-xs text-sky-200 mt-4">อัปเดตล่าสุด: ${new Date().toLocaleDateString('th-TH')}</p></div></div><div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden mb-8"><div class="px-6 py-4 border-b border-slate-100 bg-slate-50/50"><h3 class="font-bold text-slate-700">ยอดคงเหลือแยกตามรายการย่อย</h3></div><div class="overflow-x-auto"><table class="w-full text-sm"><thead class="bg-white text-slate-500 uppercase text-xs font-semibold border-b border-slate-100"><tr><th class="px-6 py-4 text-left">รายการย่อย</th><th class="px-6 py-4 text-center">จำนวนรายการ</th><th class="px-6 py-4 text-right">รับ</th><th class="px-6 py-4 text-right">จ่าย</th><th class="px-6 py-4 text-right">คงเหลือ</th><th class="px-6 py-4 text-center">รายละเอียด</th></tr></thead><tbody class="divide-y divide-slate-50">${Object.entries(summaryBySubCategory).map(([sub, data]) => `<tr class="hover:bg-pink-50/30"><td class="px-6 py-4 font-medium text-slate-700">${sub}</td><td class="px-6 py-4 text-center text-slate-400 bg-slate-50 rounded m-1">${data.count}</td><td class="px-6 py-4 text-right text-green-600 font-medium">${data.totalReceived.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-right text-red-500 font-medium">${data.totalPaid.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-right font-bold text-slate-700">${data.balance.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-center"><button onclick="showEntryForm('${register}', '${sub}')" class="text-sky-500 hover:text-sky-700 hover:underline text-xs font-medium">ตรวจสอบ</button></td></tr>`).join('')}<tr class="bg-slate-50/80 font-bold text-slate-700 border-t border-slate-200"><td class="px-6 py-4">รวมทั้งสิ้น</td><td class="px-6 py-4 text-center">${filteredRecords.length}</td><td class="px-6 py-4 text-right text-green-700">${grandTotalReceived.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-right text-red-600">${grandTotalPaid.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-right text-sky-600">${grandTotalBalance.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td></td></tr></tbody></table></div></div><div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden"><div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50"><h3 class="font-bold text-slate-700">บันทึกการเคลื่อนไหวทั้งหมด</h3><button onclick="downloadDetailedExcel('${register}')" class="text-sky-600 hover:text-sky-800 text-sm font-medium flex items-center gap-2"><i class="fas fa-download"></i> ดาวน์โหลดทั้งหมด</button></div><div class="overflow-x-auto" style="max-height: 500px;"><table class="w-full text-sm relative"><thead class="bg-white text-slate-500 uppercase text-xs font-semibold sticky top-0 z-10 border-b border-slate-200"><tr><th class="px-6 py-3 text-left bg-white">วันที่</th><th class="px-6 py-3 text-left bg-white">รายการย่อย</th><th class="px-6 py-3 text-left bg-white">รายละเอียด</th><th class="px-6 py-3 text-right bg-white">รับ</th><th class="px-6 py-3 text-right bg-white">จ่าย</th><th class="px-6 py-3 text-right bg-white">คงเหลือ</th><th class="px-6 py-3 text-center bg-white">จัดการ</th></tr></thead><tbody class="divide-y divide-slate-50">${detailedRecords.length === 0 ? `<tr><td colspan="7" class="px-6 py-10 text-center text-slate-400">ยังไม่มีรายการเคลื่อนไหว</td></tr>` : detailedRecords.map(record => `<tr class="hover:bg-pink-50/30 group"><td class="px-6 py-3 whitespace-nowrap text-slate-600">${new Date(record.date).toLocaleDateString('th-TH', {day:'2-digit', month:'2-digit', year:'2-digit'})}</td><td class="px-6 py-3 text-slate-400 font-medium text-xs">${record.sub_category}</td><td class="px-6 py-3 text-slate-700">${record.description}</td><td class="px-6 py-3 text-right text-green-600 font-medium">${record.amount_received > 0 ? record.amount_received.toLocaleString('th-TH', {minimumFractionDigits: 2}) : '-'}</td><td class="px-6 py-3 text-right text-red-500 font-medium">${record.amount_paid > 0 ? record.amount_paid.toLocaleString('th-TH', {minimumFractionDigits: 2}) : '-'}</td><td class="px-6 py-3 text-right text-slate-700 font-bold text-xs">${record.balance.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-3 text-center whitespace-nowrap"><div class="flex justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity"><button onclick="editRecord('${record.id}')" class="text-sky-500 hover:text-sky-700"><i class="fas fa-pen"></i></button><button onclick="deleteRecord('${record.id}')" class="text-pink-400 hover:text-pink-600"><i class="fas fa-trash"></i></button></div></td></tr>`).join('')}</tbody></table></div></div></div>`; }
+    function downloadOverviewExcel(register) { const filteredRecords = allRecords.filter(r => r.register_type === register); if (filteredRecords.length === 0) { showToast('ไม่มีข้อมูล', 'error'); return; } let csv = `\ufeffสรุปภาพรวม: ${register}\n\nรายการย่อย,จำนวน,เงินรับ,เงินจ่าย,คงเหลือ\n`; const summaryBySubCategory = {}; registerData[register].forEach(sub => { const subRecords = filteredRecords.filter(r => r.sub_category === sub); summaryBySubCategory[sub] = { count: subRecords.length, totalReceived: subRecords.reduce((sum, r) => sum + r.amount_received, 0), totalPaid: subRecords.reduce((sum, r) => sum + r.amount_paid, 0), balance: subRecords.length > 0 ? subRecords[subRecords.length - 1].balance : 0 }; }); Object.entries(summaryBySubCategory).forEach(([sub, data]) => { csv += `"${sub}",${data.count},${data.totalReceived},${data.totalPaid},${data.balance}\n`; }); const grandTotalReceived = filteredRecords.reduce((sum, r) => sum + r.amount_received, 0); const grandTotalPaid = filteredRecords.reduce((sum, r) => sum + r.amount_paid, 0); const grandTotalBalance = Object.values(summaryBySubCategory).reduce((sum, s) => sum + s.balance, 0); csv += `\nรวม,${filteredRecords.length},${grandTotalReceived},${grandTotalPaid},${grandTotalBalance}\n`; const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' })); link.download = `สรุปยอด_${register}_${new Date().toLocaleDateString('th-TH')}.csv`; link.click(); }
+    function downloadDetailedExcel(register) { const filteredRecords = allRecords.filter(r => r.register_type === register).sort((a, b) => new Date(a.date) - new Date(b.date)); if (filteredRecords.length === 0) { showToast('ไม่มีข้อมูล', 'error'); return; } let csv = `\ufeffรายละเอียด: ${register}\nวันที่,รายการย่อย,เลขที่,รายการ,รับ,จ่าย,คงเหลือ,หมายเหตุ\n`; filteredRecords.forEach(record => { csv += `${new Date(record.date).toLocaleDateString('th-TH')},"${record.sub_category}",${record.document_number},"${record.description}",${record.amount_received},${record.amount_paid},${record.balance},"${record.notes}"\n`; }); const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' })); link.download = `รายละเอียด_${register}_${new Date().toLocaleDateString('th-TH')}.csv`; link.click(); }
+
+    document.getElementById('back-btn').addEventListener('click', () => {
+      if (currentView === 'entry') { showSubMenu(selectedRegister); }
+      else if (currentView === 'submenu' || currentView === 'overview') { renderMainMenu(); }
+    });
+
+    const dataHandler = {
+      onSettingsLoaded(settings) { systemSettings = settings; updateHeaderDisplay(); },
+      onConfigLoaded(config) { registerData = config; },
+      onDataChanged(data) {
+        const grouped = {};
+        data.sort((a, b) => new Date(a.date) - new Date(b.date));
+        data.forEach(record => {
+            const key = `${record.register_type}|${record.sub_category}`;
+            if (!grouped[key]) grouped[key] = 0; 
+            grouped[key] += (record.amount_received - record.amount_paid);
+            record.balance = grouped[key]; 
+        });
+        allRecords = data;
+        if (currentView === 'main') renderMainMenu();
+        else if (currentView === 'submenu' && selectedRegister) showSubMenu(selectedRegister);
+        else if (currentView === 'overview' && selectedRegister) showOverview(selectedRegister);
+        else if (currentView === 'entry' && selectedRegister && selectedSubCategory) showEntryForm(selectedRegister, selectedSubCategory);
+      }
+    };
+
+    function init() {
+      if (window.dataSdk) window.dataSdk.init(dataHandler);
+      if (window.elementSdk) window.elementSdk.init({ defaultConfig, onConfigChange: onConfigChange, mapToCapabilities: () => ({}), mapToEditPanelValues: () => new Map() });
+      // Initial render happens after config is loaded
+    }
+    function onConfigChange(config) { }
+    init();
+  </script>
+ </body>
+</html>
