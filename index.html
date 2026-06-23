@@ -369,90 +369,12 @@
     function promptAddRegister() { const name = prompt("กรุณากรอกชื่อทะเบียนคุมบัญชีใหม่:"); if (name && name.trim() !== "") { window.dataSdk.addRegister(name.trim()).then(res => { if (res.isOk) { registerData[name.trim()] = []; showToast("เพิ่มทะเบียนเรียบร้อยแล้ว"); renderMainMenu(); } else { showToast("เกิดข้อผิดพลาด: " + res.message, 'error'); }}); }}
     function promptAddSubItem(registerName) { const name = prompt(`กรุณากรอกชื่อรายการย่อยสำหรับ "${registerName}":`); if (name && name.trim() !== "") { window.dataSdk.addSubItem(registerName, name.trim()).then(res => { if (res.isOk) { registerData[registerName].push(name.trim()); showToast("เพิ่มรายการย่อยเรียบร้อยแล้ว"); showSubMenu(registerName); } else { showToast("เกิดข้อผิดพลาด: " + res.message, 'error'); }}); }}
 
-    function parseLocalDate(dateText) {
-      if (!dateText) return new Date();
-      const parts = String(dateText).split('-').map(Number);
-      if (parts.length !== 3 || parts.some(isNaN)) return new Date(dateText);
-      return new Date(parts[0], parts[1] - 1, parts[2]);
-    }
-
-    function formatDateYMD(dateObj) {
-      const y = dateObj.getFullYear();
-      const m = String(dateObj.getMonth() + 1).padStart(2, '0');
-      const d = String(dateObj.getDate()).padStart(2, '0');
-      return `${y}-${m}-${d}`;
-    }
-
-    function getMonthRange(dateText) {
-      const base = parseLocalDate(dateText || formatDateYMD(new Date()));
-      const start = new Date(base.getFullYear(), base.getMonth(), 1);
-      const next = new Date(base.getFullYear(), base.getMonth() + 1, 1);
-      return { start, next, startText: formatDateYMD(start) };
-    }
-
-    function getThaiMonthYear(dateObj) {
-      const months = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
-      return `${months[dateObj.getMonth()]} ${dateObj.getFullYear() + 543}`;
-    }
-
-    function sortRecordsForBalance(records) {
-      return [...records].sort((a, b) => {
-        const dateDiff = new Date(a.date) - new Date(b.date);
-        if (dateDiff !== 0) return dateDiff;
-        return new Date(a.created_at || 0) - new Date(b.created_at || 0);
-      });
-    }
-
-    async function addOpeningBalanceFromPreviousMonth() {
-      if (!selectedRegister || !selectedSubCategory) return;
-
-      const dateInput = document.getElementById('date-input');
-      const range = getMonthRange(dateInput?.value || formatDateYMD(new Date()));
-      const sameAccountRecords = sortRecordsForBalance(allRecords.filter(r => r.register_type === selectedRegister && r.sub_category === selectedSubCategory));
-      const currentMonthRecords = sameAccountRecords.filter(r => {
-        const d = parseLocalDate(r.date);
-        return d >= range.start && d < range.next;
-      });
-
-      if (currentMonthRecords.length > 0) {
-        const last = currentMonthRecords[currentMonthRecords.length - 1];
-        showToast(`เดือน ${getThaiMonthYear(range.start)} มีข้อมูลแล้ว ใช้ยอดสุดท้าย ${Number(last.balance || 0).toLocaleString('th-TH', {minimumFractionDigits: 2})} บาท`);
-        return;
-      }
-
-      const previousRecords = sameAccountRecords.filter(r => parseLocalDate(r.date) < range.start);
-      const previousBalance = previousRecords.length ? Number(previousRecords[previousRecords.length - 1].balance || 0) : 0;
-      const openingRecord = {
-        id: `opening-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-        register_type: selectedRegister,
-        sub_category: selectedSubCategory,
-        date: range.startText,
-        document_number: '-',
-        description: `ยอดยกมาจากเดือนก่อน (${getThaiMonthYear(new Date(range.start.getFullYear(), range.start.getMonth() - 1, 1))})`,
-        amount_received: previousBalance >= 0 ? previousBalance : 0,
-        amount_paid: previousBalance < 0 ? Math.abs(previousBalance) : 0,
-        balance: previousBalance,
-        notes: 'ยอดยกมาอัตโนมัติ',
-        created_at: new Date().toISOString()
-      };
-
-      if (!confirm(`เพิ่มยอดยกมา ${previousBalance.toLocaleString('th-TH', {minimumFractionDigits: 2})} บาท สำหรับเดือน ${getThaiMonthYear(range.start)} ใช่หรือไม่?`)) return;
-
-      const result = await window.dataSdk.create(openingRecord);
-      if (result.isOk) {
-        showToast('เพิ่มยอดยกมาเรียบร้อยแล้ว');
-        await window.dataSdk.init(dataHandler);
-      } else {
-        showToast(result.message || 'เพิ่มยอดยกมาไม่สำเร็จ', 'error');
-      }
-    }
-
     // Reuse existing ShowEntry, Form, Overview, Logic (same as previous step, just minified here for space, but FULL code in actual response)
     function showEntryForm(register, subCategory) {
       currentView = 'entry'; selectedRegister = register; selectedSubCategory = subCategory; document.getElementById('back-btn').classList.remove('hidden');
       const filteredRecords = allRecords.filter(r => r.register_type === register && r.sub_category === subCategory);
       const latestBalance = filteredRecords.length > 0 ? filteredRecords[filteredRecords.length - 1].balance : 0;
-      document.getElementById('main-content').innerHTML = `<div class="max-w-7xl mx-auto space-y-8"><div class="bg-white/90 backdrop-blur rounded-2xl shadow-sm border border-pink-100 overflow-hidden" id="form-container"><div class="bg-gradient-to-r from-pink-50 to-white px-6 py-4 border-b border-pink-100 flex justify-between items-center"><div><h3 class="font-bold text-slate-700 text-lg" id="form-title"><i class="fas fa-pen-to-square mr-2 text-pink-500"></i>บันทึกข้อมูลรายวัน</h3><p class="text-sm text-pink-400 mt-1 font-medium">${subCategory}</p></div><button id="cancel-edit-btn" class="hidden px-4 py-1.5 text-sm text-red-500 border border-red-100 bg-red-50 rounded-lg hover:bg-red-100 transition-colors font-medium"><i class="fas fa-times mr-1"></i> ยกเลิก</button></div><div class="p-6"><form id="entry-form"><div class="grid grid-cols-1 md:grid-cols-12 gap-6 mb-6"><div class="md:col-span-2"><label class="block text-sm font-semibold text-slate-600 mb-2">วันที่</label><input type="date" id="date-input" required class="input-field w-full px-3 py-2.5 rounded-xl text-slate-700"></div><div class="md:col-span-3"><label class="block text-sm font-semibold text-slate-600 mb-2">เลขที่เอกสาร</label><input type="text" id="doc-number" required placeholder="ระบุเลขที่" class="input-field w-full px-3 py-2.5 rounded-xl text-slate-700"></div><div class="md:col-span-7"><label class="block text-sm font-semibold text-slate-600 mb-2">รายการ</label><input type="text" id="description" required placeholder="ระบุรายละเอียดรายการ" class="input-field w-full px-3 py-2.5 rounded-xl text-slate-700"></div></div><div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6 pb-6 border-b border-slate-50"><div><label class="block text-sm font-semibold text-slate-600 mb-2 text-green-600"><i class="fas fa-plus-circle mr-1"></i>รับ (บาท)</label><input type="number" id="amount-received" min="0" step="0.01" placeholder="0.00" class="input-field w-full px-3 py-2.5 rounded-xl text-slate-700 border-green-100 focus:border-green-400 focus:shadow-none"></div><div><label class="block text-sm font-semibold text-slate-600 mb-2 text-red-500"><i class="fas fa-minus-circle mr-1"></i>จ่าย (บาท)</label><input type="number" id="amount-paid" min="0" step="0.01" placeholder="0.00" class="input-field w-full px-3 py-2.5 rounded-xl text-slate-700 border-red-100 focus:border-red-400 focus:shadow-none"></div><div><label class="block text-sm font-semibold text-slate-600 mb-2">หมายเหตุ</label><input type="text" id="notes" placeholder="ระบุหมายเหตุ" class="input-field w-full px-3 py-2.5 rounded-xl text-slate-700"></div></div><div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 bg-blue-50/50 p-4 rounded-xl border border-blue-50"><div class="flex items-center gap-3"><div class="bg-white p-2.5 rounded-full text-sky-500 shadow-sm"><i class="fas fa-wallet"></i></div><div><p class="text-xs text-sky-500 font-bold uppercase tracking-wider">ยอดคงเหลือล่าสุด</p><p class="text-xl font-bold text-slate-700">${latestBalance.toLocaleString('th-TH', {minimumFractionDigits: 2})} <span class="text-sm font-normal text-slate-400">บาท</span></p></div></div><div class="flex flex-col sm:flex-row gap-2"><button type="button" onclick="addOpeningBalanceFromPreviousMonth()" id="opening-balance-btn" class="bg-emerald-500 hover:bg-emerald-600 text-white font-medium py-2.5 px-5 rounded-xl flex items-center justify-center gap-2 transition-all shadow-md shadow-emerald-100 transform active:scale-95"><i class="fas fa-arrows-rotate"></i><span>ยอดยกมาเดือนที่แล้ว</span></button><button type="submit" id="save-btn" class="bg-pink-400 hover:bg-pink-500 text-white font-medium py-2.5 px-6 rounded-xl flex items-center justify-center gap-2 transition-all shadow-md shadow-pink-200 transform active:scale-95"><i class="fas fa-save"></i><span id="save-btn-text">บันทึกข้อมูล</span></button></div></div></form></div></div><div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden"><div class="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-white"><div><h3 class="font-bold text-slate-700 text-lg">รายการเดินบัญชี</h3><p class="text-sm text-slate-400">ข้อมูลทั้งหมด ${filteredRecords.length} รายการ</p></div><button onclick="downloadExcel()" class="px-4 py-2 bg-white border border-slate-200 text-slate-600 hover:border-green-500 hover:text-green-600 rounded-lg flex items-center gap-2 transition-colors font-medium text-sm"><i class="fas fa-file-excel"></i><span>Export Excel</span></button></div><div class="overflow-x-auto"><table class="w-full text-sm text-left"><thead class="table-header text-sky-600 bg-sky-50/50 uppercase text-xs tracking-wider"><tr><th class="px-6 py-4 font-bold border-b-2 border-sky-100">วันที่</th><th class="px-6 py-4 font-bold border-b-2 border-sky-100">เลขที่</th><th class="px-6 py-4 font-bold border-b-2 border-sky-100 w-1/3">รายการ</th><th class="px-6 py-4 font-bold border-b-2 border-sky-100 text-right text-green-600">รับ</th><th class="px-6 py-4 font-bold border-b-2 border-sky-100 text-right text-red-500">จ่าย</th><th class="px-6 py-4 font-bold border-b-2 border-sky-100 text-right text-sky-600">คงเหลือ</th><th class="px-6 py-4 font-bold border-b-2 border-sky-100">หมายเหตุ</th><th class="px-6 py-4 font-bold border-b-2 border-sky-100 text-center">จัดการ</th></tr></thead><tbody class="divide-y divide-slate-50">${filteredRecords.length === 0 ? `<tr><td colspan="8" class="px-6 py-12 text-center text-slate-400">ยังไม่มีรายการบัญชี</td></tr>` : filteredRecords.map(record => `<tr class="table-row group"><td class="px-6 py-4 font-medium text-slate-600 whitespace-nowrap">${new Date(record.date).toLocaleDateString('th-TH', {year:'numeric', month:'2-digit', day:'2-digit'})}</td><td class="px-6 py-4 text-slate-500 font-mono text-xs bg-slate-50/50 rounded">${record.document_number}</td><td class="px-6 py-4 text-slate-700 font-medium">${record.description}</td><td class="px-6 py-4 text-right text-green-600 font-medium tracking-wide">${record.amount_received > 0 ? record.amount_received.toLocaleString('th-TH', {minimumFractionDigits: 2}) : '-'}</td><td class="px-6 py-4 text-right text-red-500 font-medium tracking-wide">${record.amount_paid > 0 ? record.amount_paid.toLocaleString('th-TH', {minimumFractionDigits: 2}) : '-'}</td><td class="px-6 py-4 text-right font-bold text-slate-700 tracking-wide bg-sky-50/30 rounded-lg">${record.balance.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-slate-400 text-xs italic">${record.notes || '-'}</td><td class="px-6 py-4 text-center whitespace-nowrap"><div class="flex items-center justify-center gap-2 opacity-60 group-hover:opacity-100 transition-opacity"><button onclick="editRecord('${record.id}')" class="w-8 h-8 rounded-lg flex items-center justify-center text-sky-500 hover:bg-sky-50 transition-colors"><i class="fas fa-pen"></i></button><button onclick="deleteRecord('${record.id}')" class="w-8 h-8 rounded-lg flex items-center justify-center text-pink-400 hover:bg-pink-50 hover:text-pink-600 transition-colors"><i class="fas fa-trash-can"></i></button></div></td></tr>`).join('')}</tbody></table></div></div></div>`;
+      document.getElementById('main-content').innerHTML = `<div class="max-w-7xl mx-auto space-y-8"><div class="bg-white/90 backdrop-blur rounded-2xl shadow-sm border border-pink-100 overflow-hidden" id="form-container"><div class="bg-gradient-to-r from-pink-50 to-white px-6 py-4 border-b border-pink-100 flex justify-between items-center"><div><h3 class="font-bold text-slate-700 text-lg" id="form-title"><i class="fas fa-pen-to-square mr-2 text-pink-500"></i>บันทึกข้อมูลรายวัน</h3><p class="text-sm text-pink-400 mt-1 font-medium">${subCategory}</p></div><button id="cancel-edit-btn" class="hidden px-4 py-1.5 text-sm text-red-500 border border-red-100 bg-red-50 rounded-lg hover:bg-red-100 transition-colors font-medium"><i class="fas fa-times mr-1"></i> ยกเลิก</button></div><div class="p-6"><form id="entry-form"><div class="grid grid-cols-1 md:grid-cols-12 gap-6 mb-6"><div class="md:col-span-2"><label class="block text-sm font-semibold text-slate-600 mb-2">วันที่</label><input type="date" id="date-input" required class="input-field w-full px-3 py-2.5 rounded-xl text-slate-700"></div><div class="md:col-span-3"><label class="block text-sm font-semibold text-slate-600 mb-2">เลขที่เอกสาร</label><input type="text" id="doc-number" required placeholder="ระบุเลขที่" class="input-field w-full px-3 py-2.5 rounded-xl text-slate-700"></div><div class="md:col-span-7"><label class="block text-sm font-semibold text-slate-600 mb-2">รายการ</label><input type="text" id="description" required placeholder="ระบุรายละเอียดรายการ" class="input-field w-full px-3 py-2.5 rounded-xl text-slate-700"></div></div><div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6 pb-6 border-b border-slate-50"><div><label class="block text-sm font-semibold text-slate-600 mb-2 text-green-600"><i class="fas fa-plus-circle mr-1"></i>รับ (บาท)</label><input type="number" id="amount-received" min="0" step="0.01" placeholder="0.00" class="input-field w-full px-3 py-2.5 rounded-xl text-slate-700 border-green-100 focus:border-green-400 focus:shadow-none"></div><div><label class="block text-sm font-semibold text-slate-600 mb-2 text-red-500"><i class="fas fa-minus-circle mr-1"></i>จ่าย (บาท)</label><input type="number" id="amount-paid" min="0" step="0.01" placeholder="0.00" class="input-field w-full px-3 py-2.5 rounded-xl text-slate-700 border-red-100 focus:border-red-400 focus:shadow-none"></div><div><label class="block text-sm font-semibold text-slate-600 mb-2">หมายเหตุ</label><input type="text" id="notes" placeholder="ระบุหมายเหตุ" class="input-field w-full px-3 py-2.5 rounded-xl text-slate-700"></div></div><div class="flex items-center justify-between bg-blue-50/50 p-4 rounded-xl border border-blue-50"><div class="flex items-center gap-3"><div class="bg-white p-2.5 rounded-full text-sky-500 shadow-sm"><i class="fas fa-wallet"></i></div><div><p class="text-xs text-sky-500 font-bold uppercase tracking-wider">ยอดคงเหลือล่าสุด</p><p class="text-xl font-bold text-slate-700">${latestBalance.toLocaleString('th-TH', {minimumFractionDigits: 2})} <span class="text-sm font-normal text-slate-400">บาท</span></p></div></div><button type="submit" id="save-btn" class="bg-pink-400 hover:bg-pink-500 text-white font-medium py-2.5 px-6 rounded-xl flex items-center gap-2 transition-all shadow-md shadow-pink-200 transform active:scale-95"><i class="fas fa-save"></i><span id="save-btn-text">บันทึกข้อมูล</span></button></div></form></div></div><div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden"><div class="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-white"><div><h3 class="font-bold text-slate-700 text-lg">รายการเดินบัญชี</h3><p class="text-sm text-slate-400">ข้อมูลทั้งหมด ${filteredRecords.length} รายการ</p></div><button onclick="downloadExcel()" class="px-4 py-2 bg-white border border-slate-200 text-slate-600 hover:border-green-500 hover:text-green-600 rounded-lg flex items-center gap-2 transition-colors font-medium text-sm"><i class="fas fa-file-excel"></i><span>Export Excel</span></button></div><div class="overflow-x-auto"><table class="w-full text-sm text-left"><thead class="table-header text-sky-600 bg-sky-50/50 uppercase text-xs tracking-wider"><tr><th class="px-6 py-4 font-bold border-b-2 border-sky-100">วันที่</th><th class="px-6 py-4 font-bold border-b-2 border-sky-100">เลขที่</th><th class="px-6 py-4 font-bold border-b-2 border-sky-100 w-1/3">รายการ</th><th class="px-6 py-4 font-bold border-b-2 border-sky-100 text-right text-green-600">รับ</th><th class="px-6 py-4 font-bold border-b-2 border-sky-100 text-right text-red-500">จ่าย</th><th class="px-6 py-4 font-bold border-b-2 border-sky-100 text-right text-sky-600">คงเหลือ</th><th class="px-6 py-4 font-bold border-b-2 border-sky-100">หมายเหตุ</th><th class="px-6 py-4 font-bold border-b-2 border-sky-100 text-center">จัดการ</th></tr></thead><tbody class="divide-y divide-slate-50">${filteredRecords.length === 0 ? `<tr><td colspan="8" class="px-6 py-12 text-center text-slate-400">ยังไม่มีรายการบัญชี</td></tr>` : filteredRecords.map(record => `<tr class="table-row group"><td class="px-6 py-4 font-medium text-slate-600 whitespace-nowrap">${new Date(record.date).toLocaleDateString('th-TH', {year:'numeric', month:'2-digit', day:'2-digit'})}</td><td class="px-6 py-4 text-slate-500 font-mono text-xs bg-slate-50/50 rounded">${record.document_number}</td><td class="px-6 py-4 text-slate-700 font-medium">${record.description}</td><td class="px-6 py-4 text-right text-green-600 font-medium tracking-wide">${record.amount_received > 0 ? record.amount_received.toLocaleString('th-TH', {minimumFractionDigits: 2}) : '-'}</td><td class="px-6 py-4 text-right text-red-500 font-medium tracking-wide">${record.amount_paid > 0 ? record.amount_paid.toLocaleString('th-TH', {minimumFractionDigits: 2}) : '-'}</td><td class="px-6 py-4 text-right font-bold text-slate-700 tracking-wide bg-sky-50/30 rounded-lg">${record.balance.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-slate-400 text-xs italic">${record.notes || '-'}</td><td class="px-6 py-4 text-center whitespace-nowrap"><div class="flex items-center justify-center gap-2 opacity-60 group-hover:opacity-100 transition-opacity"><button onclick="editRecord('${record.id}')" class="w-8 h-8 rounded-lg flex items-center justify-center text-sky-500 hover:bg-sky-50 transition-colors"><i class="fas fa-pen"></i></button><button onclick="deleteRecord('${record.id}')" class="w-8 h-8 rounded-lg flex items-center justify-center text-pink-400 hover:bg-pink-50 hover:text-pink-600 transition-colors"><i class="fas fa-trash-can"></i></button></div></td></tr>`).join('')}</tbody></table></div></div></div>`;
       setupFormListeners();
       if (isEditing && editingRecordId) { const record = allRecords.find(r => r.id === editingRecordId); if (record) populateForm(record); }
     }
@@ -704,7 +626,145 @@
     function downloadOverviewExcel(register) { exportOverviewExcel(register); }
     function downloadDetailedExcel(register) { exportRegisterExcel(register); }
 
-    function showOverview(register) { currentView = 'overview'; selectedRegister = register; document.getElementById('back-btn').classList.remove('hidden'); const filteredRecords = allRecords.filter(r => r.register_type === register); const summaryBySubCategory = {}; registerData[register].forEach(sub => { const subRecords = filteredRecords.filter(r => r.sub_category === sub); summaryBySubCategory[sub] = { count: subRecords.length, totalReceived: subRecords.reduce((sum, r) => sum + r.amount_received, 0), totalPaid: subRecords.reduce((sum, r) => sum + r.amount_paid, 0), balance: subRecords.length > 0 ? subRecords[subRecords.length - 1].balance : 0 }; }); const grandTotalReceived = filteredRecords.reduce((sum, r) => sum + r.amount_received, 0); const grandTotalPaid = filteredRecords.reduce((sum, r) => sum + r.amount_paid, 0); const grandTotalBalance = Object.values(summaryBySubCategory).reduce((sum, s) => sum + s.balance, 0); const detailedRecords = filteredRecords.sort((a, b) => new Date(a.date) - new Date(b.date)); document.getElementById('main-content').innerHTML = `<div class="max-w-7xl mx-auto"><div class="mb-8 flex items-center justify-between flex-wrap gap-4 border-b border-slate-200/60 pb-4"><div><h2 class="text-xl font-bold text-slate-700 mb-1">สรุปภาพรวม: ${register}</h2><p class="text-slate-500">สถานะการเงินปัจจุบัน</p></div><button onclick="downloadOverviewExcel('${register}')" class="px-5 py-2.5 bg-white border border-green-500 text-green-600 hover:bg-green-50 rounded-xl flex items-center gap-2 transition-colors shadow-sm font-medium"><i class="fas fa-file-csv"></i><span>ดาวน์โหลดรายงานสรุป</span></button></div><div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8"><div class="bg-white p-6 rounded-2xl border border-green-100 shadow-sm relative overflow-hidden"><div class="absolute top-0 right-0 p-4 opacity-20"><i class="fas fa-circle-down text-6xl text-green-400"></i></div><p class="text-slate-500 font-medium mb-1">รวมรับทั้งหมด</p><p class="text-3xl font-bold text-green-600">${grandTotalReceived.toLocaleString('th-TH', {minimumFractionDigits: 2})}</p><div class="w-full h-1.5 bg-green-100 mt-4 rounded-full"><div class="h-1.5 bg-green-500 rounded-full" style="width: 100%"></div></div></div><div class="bg-white p-6 rounded-2xl border border-red-100 shadow-sm relative overflow-hidden"><div class="absolute top-0 right-0 p-4 opacity-20"><i class="fas fa-circle-up text-6xl text-red-400"></i></div><p class="text-slate-500 font-medium mb-1">รวมจ่ายทั้งหมด</p><p class="text-3xl font-bold text-red-500">${grandTotalPaid.toLocaleString('th-TH', {minimumFractionDigits: 2})}</p><div class="w-full h-1.5 bg-red-100 mt-4 rounded-full"><div class="h-1.5 bg-red-400 rounded-full" style="width: 100%"></div></div></div><div class="bg-gradient-to-br from-sky-400 to-blue-500 p-6 rounded-2xl border border-sky-300 shadow-lg shadow-sky-200 relative overflow-hidden text-white"><div class="absolute top-0 right-0 p-4 opacity-20"><i class="fas fa-wallet text-6xl text-white"></i></div><p class="text-sky-100 font-medium mb-1">คงเหลือสุทธิ</p><p class="text-3xl font-bold text-white">${grandTotalBalance.toLocaleString('th-TH', {minimumFractionDigits: 2})}</p><p class="text-xs text-sky-200 mt-4">อัปเดตล่าสุด: ${new Date().toLocaleDateString('th-TH')}</p></div></div><div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden mb-8"><div class="px-6 py-4 border-b border-slate-100 bg-slate-50/50"><h3 class="font-bold text-slate-700">ยอดคงเหลือแยกตามรายการย่อย</h3></div><div class="overflow-x-auto"><table class="w-full text-sm"><thead class="bg-white text-slate-500 uppercase text-xs font-semibold border-b border-slate-100"><tr><th class="px-6 py-4 text-left">รายการย่อย</th><th class="px-6 py-4 text-center">จำนวนรายการ</th><th class="px-6 py-4 text-right">รับ</th><th class="px-6 py-4 text-right">จ่าย</th><th class="px-6 py-4 text-right">คงเหลือ</th><th class="px-6 py-4 text-center">รายละเอียด</th></tr></thead><tbody class="divide-y divide-slate-50">${Object.entries(summaryBySubCategory).map(([sub, data]) => `<tr class="hover:bg-pink-50/30"><td class="px-6 py-4 font-medium text-slate-700">${sub}</td><td class="px-6 py-4 text-center text-slate-400 bg-slate-50 rounded m-1">${data.count}</td><td class="px-6 py-4 text-right text-green-600 font-medium">${data.totalReceived.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-right text-red-500 font-medium">${data.totalPaid.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-right font-bold text-slate-700">${data.balance.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-center"><button onclick="showEntryForm('${register}', '${sub}')" class="text-sky-500 hover:text-sky-700 hover:underline text-xs font-medium">ตรวจสอบ</button></td></tr>`).join('')}<tr class="bg-slate-50/80 font-bold text-slate-700 border-t border-slate-200"><td class="px-6 py-4">รวมทั้งสิ้น</td><td class="px-6 py-4 text-center">${filteredRecords.length}</td><td class="px-6 py-4 text-right text-green-700">${grandTotalReceived.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-right text-red-600">${grandTotalPaid.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-right text-sky-600">${grandTotalBalance.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td></td></tr></tbody></table></div></div><div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden"><div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50"><h3 class="font-bold text-slate-700">บันทึกการเคลื่อนไหวทั้งหมด</h3><button onclick="downloadDetailedExcel('${register}')" class="text-sky-600 hover:text-sky-800 text-sm font-medium flex items-center gap-2"><i class="fas fa-download"></i> ดาวน์โหลดทั้งหมด</button></div><div class="overflow-x-auto" style="max-height: 500px;"><table class="w-full text-sm relative"><thead class="bg-white text-slate-500 uppercase text-xs font-semibold sticky top-0 z-10 border-b border-slate-200"><tr><th class="px-6 py-3 text-left bg-white">วันที่</th><th class="px-6 py-3 text-left bg-white">รายการย่อย</th><th class="px-6 py-3 text-left bg-white">รายละเอียด</th><th class="px-6 py-3 text-right bg-white">รับ</th><th class="px-6 py-3 text-right bg-white">จ่าย</th><th class="px-6 py-3 text-right bg-white">คงเหลือ</th><th class="px-6 py-3 text-center bg-white">จัดการ</th></tr></thead><tbody class="divide-y divide-slate-50">${detailedRecords.length === 0 ? `<tr><td colspan="7" class="px-6 py-10 text-center text-slate-400">ยังไม่มีรายการเคลื่อนไหว</td></tr>` : detailedRecords.map(record => `<tr class="hover:bg-pink-50/30 group"><td class="px-6 py-3 whitespace-nowrap text-slate-600">${new Date(record.date).toLocaleDateString('th-TH', {day:'2-digit', month:'2-digit', year:'2-digit'})}</td><td class="px-6 py-3 text-slate-400 font-medium text-xs">${record.sub_category}</td><td class="px-6 py-3 text-slate-700">${record.description}</td><td class="px-6 py-3 text-right text-green-600 font-medium">${record.amount_received > 0 ? record.amount_received.toLocaleString('th-TH', {minimumFractionDigits: 2}) : '-'}</td><td class="px-6 py-3 text-right text-red-500 font-medium">${record.amount_paid > 0 ? record.amount_paid.toLocaleString('th-TH', {minimumFractionDigits: 2}) : '-'}</td><td class="px-6 py-3 text-right text-slate-700 font-bold text-xs">${record.balance.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-3 text-center whitespace-nowrap"><div class="flex justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity"><button onclick="editRecord('${record.id}')" class="text-sky-500 hover:text-sky-700"><i class="fas fa-pen"></i></button><button onclick="deleteRecord('${record.id}')" class="text-pink-400 hover:text-pink-600"><i class="fas fa-trash"></i></button></div></td></tr>`).join('')}</tbody></table></div></div></div>`; }
+    function toInputMonth(dateObj = new Date()) {
+      const y = dateObj.getFullYear();
+      const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+      return `${y}-${m}`;
+    }
+
+    function getThaiMonthFullFromInput(monthInput) {
+      const [year, month] = String(monthInput || '').split('-').map(Number);
+      if (!year || !month) return '';
+      const monthName = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'][month - 1] || '';
+      return `${monthName} ${year + 543}`;
+    }
+
+    function getMonthRangeFromInput(monthInput) {
+      const [year, month] = String(monthInput || '').split('-').map(Number);
+      if (!year || !month) return null;
+      const start = `${year}-${String(month).padStart(2, '0')}-01`;
+      const nextDate = new Date(year, month, 1);
+      const next = `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, '0')}-01`;
+      return { start, next };
+    }
+
+    function getSortedRecords(register, subCategory) {
+      return allRecords
+        .filter(r => r.register_type === register && r.sub_category === subCategory)
+        .sort((a, b) => new Date(a.date) - new Date(b.date) || new Date(a.created_at || 0) - new Date(b.created_at || 0));
+    }
+
+    async function promptOpeningBalance(register, subCategory) {
+      const monthInput = prompt(`กรุณาระบุเดือนที่ต้องการตรวจสอบ/กรอกยอดยกมา\nรูปแบบ: YYYY-MM`, toInputMonth());
+      if (!monthInput) return;
+
+      const range = getMonthRangeFromInput(monthInput.trim());
+      if (!range) {
+        showToast('รูปแบบเดือนไม่ถูกต้อง เช่น 2026-06', 'error');
+        return;
+      }
+
+      const records = getSortedRecords(register, subCategory);
+      const previousRecords = records.filter(r => r.date < range.start);
+      const monthRecords = records.filter(r => r.date >= range.start && r.date < range.next);
+
+      if (monthRecords.length > 0) {
+        const latest = monthRecords[monthRecords.length - 1];
+        alert(`เดือน${getThaiMonthFullFromInput(monthInput)} มีข้อมูลอยู่แล้ว\nระบบจะใช้ยอดสุดท้ายของเดือนนี้: ${Number(latest.balance || 0).toLocaleString('th-TH', {minimumFractionDigits: 2})} บาท`);
+        return;
+      }
+
+      if (previousRecords.length > 0) {
+        const latest = previousRecords[previousRecords.length - 1];
+        alert(`พบยอดยกมาจากข้อมูลก่อนหน้าแล้ว\nยอดสุดท้ายก่อนเดือน${getThaiMonthFullFromInput(monthInput)} คือ ${Number(latest.balance || 0).toLocaleString('th-TH', {minimumFractionDigits: 2})} บาท\nไม่ต้องกรอกซ้ำ ระบบจะใช้ยอดนี้ต่อให้อัตโนมัติ`);
+        return;
+      }
+
+      const amountText = prompt(`ยังไม่พบข้อมูลก่อนหน้า\nกรุณากรอกยอดยกมาสำหรับ\n${subCategory}\nเดือน${getThaiMonthFullFromInput(monthInput)}\n\nหมายเหตุ: ถ้ายอดติดลบให้ใส่เครื่องหมาย -`, '0.00');
+      if (amountText === null) return;
+
+      const amount = Number(String(amountText).replace(/,/g, '').trim());
+      if (isNaN(amount)) {
+        showToast('กรุณากรอกยอดเป็นตัวเลข', 'error');
+        return;
+      }
+
+      const openingRecord = {
+        id: `opening-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        register_type: register,
+        sub_category: subCategory,
+        date: range.start,
+        document_number: 'ยกมา',
+        description: `ยอดยกมาเดือน${getThaiMonthFullFromInput(monthInput)}`,
+        amount_received: amount >= 0 ? amount : 0,
+        amount_paid: amount < 0 ? Math.abs(amount) : 0,
+        balance: 0,
+        notes: 'บันทึกยอดยกมาจากหน้าภาพรวม',
+        created_at: new Date().toISOString()
+      };
+
+      if (!confirm(`ยืนยันบันทึกยอดยกมา ${amount.toLocaleString('th-TH', {minimumFractionDigits: 2})} บาท\nสำหรับ ${subCategory} ใช่หรือไม่?`)) return;
+
+      const result = await window.dataSdk.create(openingRecord);
+      if (result.isOk) {
+        showToast('บันทึกยอดยกมาเรียบร้อยแล้ว');
+        await window.dataSdk.init(dataHandler);
+      } else {
+        showToast(result.message || 'บันทึกยอดยกมาไม่สำเร็จ', 'error');
+      }
+    }
+
+    function showOverview(register) {
+      currentView = 'overview';
+      selectedRegister = register;
+      document.getElementById('back-btn').classList.remove('hidden');
+
+      const filteredRecords = allRecords.filter(r => r.register_type === register);
+      const summaryBySubCategory = {};
+      (registerData[register] || []).forEach(sub => {
+        const subRecords = getSortedRecords(register, sub);
+        summaryBySubCategory[sub] = {
+          count: subRecords.length,
+          totalReceived: subRecords.reduce((sum, r) => sum + Number(r.amount_received || 0), 0),
+          totalPaid: subRecords.reduce((sum, r) => sum + Number(r.amount_paid || 0), 0),
+          balance: subRecords.length > 0 ? Number(subRecords[subRecords.length - 1].balance || 0) : 0
+        };
+      });
+
+      const grandTotalReceived = filteredRecords.reduce((sum, r) => sum + Number(r.amount_received || 0), 0);
+      const grandTotalPaid = filteredRecords.reduce((sum, r) => sum + Number(r.amount_paid || 0), 0);
+      const grandTotalBalance = Object.values(summaryBySubCategory).reduce((sum, s) => sum + Number(s.balance || 0), 0);
+      const detailedRecords = [...filteredRecords].sort((a, b) => new Date(a.date) - new Date(b.date));
+
+      document.getElementById('main-content').innerHTML = `<div class="max-w-7xl mx-auto">
+        <div class="mb-8 flex items-center justify-between flex-wrap gap-4 border-b border-slate-200/60 pb-4">
+          <div>
+            <h2 class="text-xl font-bold text-slate-700 mb-1">สรุปภาพรวม: ${register}</h2>
+            <p class="text-slate-500">สถานะการเงินปัจจุบัน และกรอกยอดยกมาแยกตามรายการย่อย</p>
+          </div>
+          <button onclick='downloadOverviewExcel(${JSON.stringify(register)})' class="px-5 py-2.5 bg-white border border-green-500 text-green-600 hover:bg-green-50 rounded-xl flex items-center gap-2 transition-colors shadow-sm font-medium"><i class="fas fa-file-excel"></i><span>ดาวน์โหลดรายงานสรุป</span></button>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+          <div class="bg-white p-6 rounded-2xl border border-green-100 shadow-sm relative overflow-hidden"><div class="absolute top-0 right-0 p-4 opacity-20"><i class="fas fa-circle-down text-6xl text-green-400"></i></div><p class="text-slate-500 font-medium mb-1">รวมรับทั้งหมด</p><p class="text-3xl font-bold text-green-600">${grandTotalReceived.toLocaleString('th-TH', {minimumFractionDigits: 2})}</p><div class="w-full h-1.5 bg-green-100 mt-4 rounded-full"><div class="h-1.5 bg-green-500 rounded-full" style="width: 100%"></div></div></div>
+          <div class="bg-white p-6 rounded-2xl border border-red-100 shadow-sm relative overflow-hidden"><div class="absolute top-0 right-0 p-4 opacity-20"><i class="fas fa-circle-up text-6xl text-red-400"></i></div><p class="text-slate-500 font-medium mb-1">รวมจ่ายทั้งหมด</p><p class="text-3xl font-bold text-red-500">${grandTotalPaid.toLocaleString('th-TH', {minimumFractionDigits: 2})}</p><div class="w-full h-1.5 bg-red-100 mt-4 rounded-full"><div class="h-1.5 bg-red-400 rounded-full" style="width: 100%"></div></div></div>
+          <div class="bg-gradient-to-br from-sky-400 to-blue-500 p-6 rounded-2xl border border-sky-300 shadow-lg shadow-sky-200 relative overflow-hidden text-white"><div class="absolute top-0 right-0 p-4 opacity-20"><i class="fas fa-wallet text-6xl text-white"></i></div><p class="text-sky-100 font-medium mb-1">คงเหลือสุทธิ</p><p class="text-3xl font-bold text-white">${grandTotalBalance.toLocaleString('th-TH', {minimumFractionDigits: 2})}</p><p class="text-xs text-sky-200 mt-4">อัปเดตล่าสุด: ${new Date().toLocaleDateString('th-TH')}</p></div>
+        </div>
+
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden mb-8">
+          <div class="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between flex-wrap gap-3">
+            <h3 class="font-bold text-slate-700">ยอดคงเหลือแยกตามรายการย่อย</h3>
+            <p class="text-sm text-slate-400">กด “กรอกยอดยกมา” ในรายการที่ต้องการ</p>
+          </div>
+          <div class="overflow-x-auto"><table class="w-full text-sm"><thead class="bg-white text-slate-500 uppercase text-xs font-semibold border-b border-slate-100"><tr><th class="px-6 py-4 text-left">รายการย่อย</th><th class="px-6 py-4 text-center">จำนวนรายการ</th><th class="px-6 py-4 text-right">รับ</th><th class="px-6 py-4 text-right">จ่าย</th><th class="px-6 py-4 text-right">คงเหลือ</th><th class="px-6 py-4 text-center">จัดการ</th></tr></thead><tbody class="divide-y divide-slate-50">
+            ${Object.entries(summaryBySubCategory).map(([sub, data]) => `<tr class="hover:bg-pink-50/30"><td class="px-6 py-4 font-medium text-slate-700">${sub}</td><td class="px-6 py-4 text-center text-slate-400 bg-slate-50 rounded m-1">${data.count}</td><td class="px-6 py-4 text-right text-green-600 font-medium">${data.totalReceived.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-right text-red-500 font-medium">${data.totalPaid.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-right font-bold text-slate-700">${data.balance.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-center whitespace-nowrap"><button onclick='promptOpeningBalance(${JSON.stringify(register)}, ${JSON.stringify(sub)})' class="px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200 text-xs font-medium mr-2"><i class="fas fa-coins mr-1"></i>กรอกยอดยกมา</button><button onclick='showEntryForm(${JSON.stringify(register)}, ${JSON.stringify(sub)})' class="px-3 py-1.5 rounded-lg bg-sky-50 text-sky-600 hover:bg-sky-100 border border-sky-100 text-xs font-medium">ตรวจสอบ</button></td></tr>`).join('')}
+            <tr class="bg-slate-50/80 font-bold text-slate-700 border-t border-slate-200"><td class="px-6 py-4">รวมทั้งสิ้น</td><td class="px-6 py-4 text-center">${filteredRecords.length}</td><td class="px-6 py-4 text-right text-green-700">${grandTotalReceived.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-right text-red-600">${grandTotalPaid.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-4 text-right text-sky-600">${grandTotalBalance.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td></td></tr>
+          </tbody></table></div>
+        </div>
+
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden"><div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50"><h3 class="font-bold text-slate-700">บันทึกการเคลื่อนไหวทั้งหมด</h3><button onclick='downloadDetailedExcel(${JSON.stringify(register)})' class="text-sky-600 hover:text-sky-800 text-sm font-medium flex items-center gap-2"><i class="fas fa-download"></i> ดาวน์โหลดทั้งหมด</button></div><div class="overflow-x-auto" style="max-height: 500px;"><table class="w-full text-sm relative"><thead class="bg-white text-slate-500 uppercase text-xs font-semibold sticky top-0 z-10 border-b border-slate-200"><tr><th class="px-6 py-3 text-left bg-white">วันที่</th><th class="px-6 py-3 text-left bg-white">รายการย่อย</th><th class="px-6 py-3 text-left bg-white">รายละเอียด</th><th class="px-6 py-3 text-right bg-white">รับ</th><th class="px-6 py-3 text-right bg-white">จ่าย</th><th class="px-6 py-3 text-right bg-white">คงเหลือ</th><th class="px-6 py-3 text-center bg-white">จัดการ</th></tr></thead><tbody class="divide-y divide-slate-50">${detailedRecords.length === 0 ? `<tr><td colspan="7" class="px-6 py-10 text-center text-slate-400">ยังไม่มีรายการเคลื่อนไหว</td></tr>` : detailedRecords.map(record => `<tr class="hover:bg-pink-50/30 group"><td class="px-6 py-3 whitespace-nowrap text-slate-600">${new Date(record.date).toLocaleDateString('th-TH', {day:'2-digit', month:'2-digit', year:'2-digit'})}</td><td class="px-6 py-3 text-slate-400 font-medium text-xs">${record.sub_category}</td><td class="px-6 py-3 text-slate-700">${record.description}</td><td class="px-6 py-3 text-right text-green-600 font-medium">${record.amount_received > 0 ? record.amount_received.toLocaleString('th-TH', {minimumFractionDigits: 2}) : '-'}</td><td class="px-6 py-3 text-right text-red-500 font-medium">${record.amount_paid > 0 ? record.amount_paid.toLocaleString('th-TH', {minimumFractionDigits: 2}) : '-'}</td><td class="px-6 py-3 text-right text-slate-700 font-bold text-xs">${record.balance.toLocaleString('th-TH', {minimumFractionDigits: 2})}</td><td class="px-6 py-3 text-center whitespace-nowrap"><div class="flex justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity"><button onclick="editRecord('${record.id}')" class="text-sky-500 hover:text-sky-700"><i class="fas fa-pen"></i></button><button onclick="deleteRecord('${record.id}')" class="text-pink-400 hover:text-pink-600"><i class="fas fa-trash"></i></button></div></td></tr>`).join('')}</tbody></table></div></div>
+      </div>`;
+    }
 
     document.getElementById('back-btn').addEventListener('click', () => {
       if (currentView === 'entry') { showSubMenu(selectedRegister); }
@@ -716,7 +776,7 @@
       onConfigLoaded(config) { registerData = config; },
       onDataChanged(data) {
         const grouped = {};
-        data.sort((a, b) => { const d = new Date(a.date) - new Date(b.date); if (d !== 0) return d; return new Date(a.created_at || 0) - new Date(b.created_at || 0); });
+        data.sort((a, b) => new Date(a.date) - new Date(b.date));
         data.forEach(record => {
             const key = `${record.register_type}|${record.sub_category}`;
             if (!grouped[key]) grouped[key] = 0; 
